@@ -1,0 +1,53 @@
+# Python bytecode and interpreter caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test, type-checker, and coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*~
+
+# Generated figures and image artifacts
+*.fig
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.svg
+*.eps
+
+# Transient simulator execution state (preserve scenario inputs and result data)
+/simulator/runs/**/logs/
+/simulator/runs/**/parts/
+/simulator/runs/**/archive/
+/simulator/runs/**/launcher.pid
+/simulator/runs/**/monitor_progress.py
+/simulator/runs/**/start_all_*.sh
+/simulator/runs/**/_trial_journal.jsonl
+/simulator/runs/**/_FAILED.txt
+/simulator/runs/**/_COMPLETE.txt
