@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, List
 
 
 @dataclass
@@ -17,6 +17,10 @@ class RobotCounters:
     messages_sent: int = 0
     messages_delivered_to_robot: int = 0
     messages_dropped_to_robot: int = 0
+    allocator_time_ns_samples: List[int] = field(default_factory=list)
+    allocator_time_ns_pre_clue: List[int] = field(default_factory=list)
+    allocator_time_ns_post_clue: List[int] = field(default_factory=list)
+    candidate_filter_time_ns_samples: List[int] = field(default_factory=list)
 
 @dataclass
 class MessageCounters:

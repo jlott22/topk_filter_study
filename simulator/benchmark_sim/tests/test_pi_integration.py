@@ -184,6 +184,33 @@ class PIIntegrationTests(unittest.TestCase):
         self.assertIn(third, robot.pi_path)
         self.assertLessEqual(len(robot.pi_path), PIAllocator.BUNDLE_SIZE)
 
+    def test_ownership_message_updates_current_goal_to_repaired_path_head(self) -> None:
+        state = _state()
+        robot = state.robots["01"]
+        robot.belief.add_clue((1, 1))
+        decision = robot.allocator.choose_goal(robot)
+        old_path = list(robot.pi_path)
+        self.assertGreaterEqual(len(old_path), 2)
+        old_head = old_path[0]
+        robot.current_goal = decision.goal
+
+        current_sig = robot.pi_significance_by_cell[old_head]
+        robot._deliver_allocator_payload({
+            "type": "pi_entry",
+            "sender": "00",
+            "x": old_head[0],
+            "y": old_head[1],
+            "owner": "00",
+            "significance": max(0.0, float(current_sig) - 0.001),
+            "timestamp": 10.0,
+            "order": 0,
+            "path_cells": [{"x": old_head[0], "y": old_head[1]}],
+            "path_size": 1,
+        })
+
+        self.assertNotEqual(robot.pi_path[0], old_head)
+        self.assertEqual(robot.current_goal, robot.pi_path[0])
+
     def test_empty_pi_clear_path_clears_sender_stale_claims(self) -> None:
         state = _state()
         receiver = state.robots["01"]
@@ -217,6 +244,23 @@ class PIIntegrationTests(unittest.TestCase):
         self.assertLess(high_p_cost, low_p_cost)
         self.assertGreaterEqual(high_p_cost, 0.0)
         self.assertTrue(math.isfinite(high_p_cost))
+
+    def test_tiny_positive_map_maximum_is_not_replaced_by_eps_fallback(self) -> None:
+        state = _state(grid_size=5)
+        robot = state.robots["00"]
+        robot.belief.target_p = {(4, 0): 5.0e-10, (0, 4): 2.5e-10}
+
+        robot.allocator._refresh_probability_normalizer(robot)
+
+        self.assertEqual(robot.pi_probability_normalizer, 5.0e-10)
+        self.assertEqual(
+            robot.allocator._normalized_target_probability(robot, (4, 0)),
+            1.0,
+        )
+        self.assertEqual(
+            robot.allocator._normalized_target_probability(robot, (0, 4)),
+            0.5,
+        )
 
     def test_route_costs_and_significances_are_finite_nonnegative(self) -> None:
         state = _state(grid_size=5)

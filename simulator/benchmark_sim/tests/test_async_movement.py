@@ -28,6 +28,11 @@ class _TwoNorthGoalAllocator(_FixedGoalAllocator):
     goal = (0, 2)
 
 
+class _NoGoalAllocator(AllocatorBase):
+    def choose_goal(self, robot):
+        return AllocationDecision(goal=None)
+
+
 class _SequentialGoalAllocator(AllocatorBase):
     goals: list[Cell] = [(0, 1), (0, 2)]
 
@@ -96,6 +101,21 @@ def _runner(cfg: SimConfig, allocator_cls: type[AllocatorBase]) -> tuple[AsyncTr
 
 
 class AsyncMovementTests(unittest.TestCase):
+    def test_first_no_goal_publishes_one_clear_then_deduplicates_it(self) -> None:
+        runner, state, queue, order = _runner(_cfg(), _NoGoalAllocator)
+        robot = state.robots["00"]
+
+        event, order = runner.process_next_event(state, queue, order)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.result.reason, "no_goal")
+        self.assertIsNone(robot._communicated_collision_intent)
+        self.assertEqual(state.bus.counters.sent_by_topic.get("collision_intent"), 1)
+
+        event, order = runner.process_next_event(state, queue, order)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.result.reason, "no_goal")
+        self.assertEqual(state.bus.counters.sent_by_topic.get("collision_intent"), 1)
+
     def test_turn_intent_sync_then_move_counts_one_step(self) -> None:
         runner, state, queue, order = _runner(_cfg(), _NorthGoalAllocator)
         robot = state.robots["00"]
@@ -165,7 +185,7 @@ class AsyncMovementTests(unittest.TestCase):
         self.assertEqual(state.bus.counters.unprotected_sent_total, 1)
         self.assertEqual(state.bus.counters.sent_by_topic.get("state"), 1)
 
-    def test_peer_collision_intent_persists_until_replaced(self) -> None:
+    def test_peer_collision_position_and_intent_remain_separate(self) -> None:
         runner, state, queue, order = _runner(_cfg_two_robots(), _NorthGoalAllocator)
         robot = state.robots["00"]
         peer = state.robots["01"]
@@ -174,20 +194,26 @@ class AsyncMovementTests(unittest.TestCase):
         state.bus.pump(1.0)
 
         self.assertEqual(peer._collision_peer_intents["00"], (0, 1))
-        self.assertEqual(peer._collision_peer_positions["00"], (0, 1))
+        self.assertEqual(peer._collision_peer_positions["00"], (0, 0))
 
         robot.pos = (0, 1)
         robot.publish_state()
         state.bus.pump(2.0)
 
         self.assertEqual(peer._collision_peer_intents["00"], (0, 1))
-        self.assertEqual(peer._collision_peer_positions["00"], (0, 1))
+        self.assertEqual(peer._collision_peer_positions["00"], (0, 0))
 
         robot._set_collision_intent((0, 2))
         state.bus.pump(3.0)
 
         self.assertEqual(peer._collision_peer_intents["00"], (0, 2))
-        self.assertEqual(peer._collision_peer_positions["00"], (0, 2))
+        self.assertEqual(peer._collision_peer_positions["00"], (0, 1))
+
+        robot._set_collision_intent(None)
+        state.bus.pump(4.0)
+
+        self.assertNotIn("00", peer._collision_peer_intents)
+        self.assertEqual(peer._collision_peer_positions["00"], (0, 1))
 
     def test_step_until_processes_a_simulated_time_window(self) -> None:
         runner, state, queue, order = _runner(_cfg(), _NorthGoalAllocator)
@@ -226,20 +252,35 @@ class AsyncMovementTests(unittest.TestCase):
         self.assertNotIn((0, 1), robot.last_path)
         self.assertEqual(robot.counters.collision_prevention_events, 0)
 
-    def test_pre_clue_collision_replan_does_not_increment_churn_metrics(self) -> None:
+    def test_protected_intent_is_rechecked_after_attempted_intent_publication(self) -> None:
         runner, state, queue, order = _runner(
-            _cfg(collision_intent_settle_s=0.0),
+            _cfg(collision_intent_settle_s=0.1),
             _TwoNorthGoalAllocator,
         )
         robot = state.robots["00"]
         robot._collision_peer_intents["01"] = (0, 1)
 
-        event, order = runner.process_next_event(state, queue, order)
+        events = []
+        for _ in range(5):
+            event, order = runner.process_next_event(state, queue, order)
+            self.assertIsNotNone(event)
+            events.append(event)
 
-        self.assertIsNotNone(event)
-        self.assertEqual(event.result.reason, "moved")
+        self.assertEqual(
+            [event.result.reason for event in events],
+            ["turn", "intent_sync", "turn", "intent_sync", "moved"],
+        )
         self.assertEqual(robot.pos, (1, 0))
         self.assertNotIn((0, 1), robot.last_path)
+        # The protected collision report was delivered while the droppable
+        # peer-state report was absent. The robot first advertises its selected
+        # north transition, detects the conflict at the immediate safety
+        # boundary, then advertises the alternate east transition.
+        self.assertEqual(state.bus.counters.protected_sent_total, 2)
+        self.assertEqual(
+            state.bus.counters.sent_by_topic.get("collision_intent"), 2
+        )
+        self.assertEqual(robot._communicated_collision_intent, (1, 0))
         self.assertEqual(robot.counters.collision_prevention_events, 0)
         self.assertEqual(robot.counters.path_replans, 0)
 
@@ -252,10 +293,16 @@ class AsyncMovementTests(unittest.TestCase):
         robot = state.robots["00"]
         robot._collision_peer_intents["01"] = (0, 1)
 
-        event, order = runner.process_next_event(state, queue, order)
+        events = []
+        for _ in range(3):
+            event, order = runner.process_next_event(state, queue, order)
+            self.assertIsNotNone(event)
+            events.append(event)
 
-        self.assertIsNotNone(event)
-        self.assertEqual(event.result.reason, "moved")
+        self.assertEqual(
+            [event.result.reason for event in events],
+            ["turn", "turn", "moved"],
+        )
         self.assertEqual(robot.pos, (1, 0))
         self.assertNotIn((0, 1), robot.last_path)
         self.assertEqual(robot.counters.collision_prevention_events, 1)
@@ -270,18 +317,44 @@ class AsyncMovementTests(unittest.TestCase):
         robot = state.robots["00"]
         robot._collision_peer_intents["01"] = (0, 1)
 
+        turn, order = runner.process_next_event(state, queue, order)
         first, order = runner.process_next_event(state, queue, order)
         second, order = runner.process_next_event(state, queue, order)
 
+        self.assertIsNotNone(turn)
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
+        self.assertEqual(turn.result.reason, "turn")
         self.assertEqual(first.result.reason, "path_failed")
         self.assertEqual(second.result.reason, "blocked_goal_backoff")
         self.assertEqual(robot.pos, (0, 0))
+        self.assertEqual(state.bus.counters.protected_sent_total, 4)
+        self.assertEqual(
+            state.bus.counters.sent_by_topic.get("collision_intent"), 4
+        )
+        self.assertIsNone(robot._communicated_collision_intent)
         self.assertGreaterEqual(second.result.time_cost_s, 0.0)
         self.assertLessEqual(second.result.time_cost_s, 5.0)
         self.assertEqual(robot.counters.collision_prevention_events, 1)
         self.assertGreater(robot.counters.path_replans, robot.counters.collision_prevention_events)
+
+    def test_pre_clue_no_alternate_path_clears_sweep_goal_without_backoff(self) -> None:
+        runner, state, queue, order = _runner(
+            _cfg(collision_intent_settle_s=0.0),
+            _NorthGoalAllocator,
+        )
+        robot = state.robots["00"]
+        robot._collision_peer_intents["01"] = (0, 1)
+
+        turn, order = runner.process_next_event(state, queue, order)
+        failed, order = runner.process_next_event(state, queue, order)
+
+        self.assertEqual(turn.result.reason, "turn")
+        self.assertEqual(failed.result.reason, "path_failed")
+        self.assertIsNone(robot.current_goal)
+        self.assertEqual(robot._blocked_goal_failures, {})
+        self.assertEqual(state.bus.counters.protected_sent_total, 2)
+        self.assertIsNone(robot._communicated_collision_intent)
 
     def test_repeated_blocked_goal_is_temporarily_invalid_until_backoff_time(self) -> None:
         runner, state, queue, order = _runner(
@@ -291,6 +364,9 @@ class AsyncMovementTests(unittest.TestCase):
         state.world.first_clue_time_s = 0.0
         robot = state.robots["00"]
         robot._collision_peer_intents["01"] = (0, 1)
+
+        turn, order = runner.process_next_event(state, queue, order)
+        self.assertEqual(turn.result.reason, "turn")
 
         first, order = runner.process_next_event(state, queue, order)
         self.assertEqual(first.result.reason, "path_failed")

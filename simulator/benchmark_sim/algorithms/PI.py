@@ -3,12 +3,13 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any, Dict, List, Optional, Tuple
 
-from benchmark_sim.algorithms.base import AllocatorBase
+from benchmark_sim.algorithms.base import AllocatorBase, timed_candidate_filter
+from benchmark_sim.algorithms.memory_optimized import PIOptimizationMixin
 from benchmark_sim.core.types import AllocationDecision, Cell
 
 
 
-class PIAllocator(AllocatorBase):
+class PIReferenceAllocator(AllocatorBase):
     """
     Performance Impact (PI) allocator for the decentralized benchmark simulator.
 
@@ -190,6 +191,7 @@ class PIAllocator(AllocatorBase):
         cell, insertion_index, marginal_cost, _ = best
         return cell, insertion_index, marginal_cost
 
+    @timed_candidate_filter
     def _candidate_cells(self, robot: Any) -> List[Cell]:
         grid_size = self._grid_size(robot)
         cells: List[Cell] = []
@@ -445,7 +447,7 @@ class PIAllocator(AllocatorBase):
                 if isfinite(p) and p > max_p:
                     max_p = p
 
-        if max_p <= self.EPS or not isfinite(max_p):
+        if max_p <= 0.0 or not isfinite(max_p):
             max_p = 1.0
 
         setattr(robot, "pi_probability_normalizer", float(max_p))
@@ -455,7 +457,7 @@ class PIAllocator(AllocatorBase):
         """Return target_p[cell] / max(target_p) clamped to [0, 1]."""
 
         normalizer = float(getattr(robot, "pi_probability_normalizer", 0.0) or 0.0)
-        if normalizer <= self.EPS or not isfinite(normalizer):
+        if normalizer <= 0.0 or not isfinite(normalizer):
             self._refresh_probability_normalizer(robot)
             normalizer = float(getattr(robot, "pi_probability_normalizer", 1.0) or 1.0)
 
@@ -925,8 +927,9 @@ class PIAllocator(AllocatorBase):
     def _sync_current_goal_after_message(self, robot: Any) -> None:
         previous_goal = self._current_goal(robot)
         path = self._get_path(robot)
-        if previous_goal is not None and not path and hasattr(robot, "current_goal"):
-            setattr(robot, "current_goal", None)
+        next_goal = path[0] if path else None
+        if previous_goal != next_goal and hasattr(robot, "current_goal"):
+            setattr(robot, "current_goal", next_goal)
 
     def _next_time(self, robot: Any) -> float:
         self._ensure_pi_state(robot)
@@ -1095,4 +1098,9 @@ class PIAllocator(AllocatorBase):
             return 1, text
 
 
+class PIAllocator(PIOptimizationMixin, PIReferenceAllocator):
+    """Memory-bounded PI with reference-identical decisions and messages."""
+
+
+PIOptimizedAllocator = PIAllocator
 Allocator = PIAllocator

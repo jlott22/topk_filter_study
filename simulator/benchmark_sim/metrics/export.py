@@ -32,10 +32,13 @@ def write_outputs(
     robot_performance_rows: Sequence[dict],
     config: dict,
     write_parquet: bool = False,
+    computational_performance_rows: Sequence[dict] | None = None,
 ) -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(out / "trial_summary.csv", trial_summary_rows)
     write_csv(out / "system_performance.csv", system_performance_rows)
     write_csv(out / "robot_performance.csv", robot_performance_rows)
+    if computational_performance_rows is not None:
+        write_csv(out / "computational_performance.csv", computational_performance_rows)
     (out / "config_used.json").write_text(json.dumps(config, indent=2, default=str))

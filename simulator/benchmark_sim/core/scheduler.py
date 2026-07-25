@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import heapq
 import random
+from time import perf_counter_ns
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Type
 
@@ -11,6 +12,7 @@ from benchmark_sim.comms.models import CommunicationModel
 from benchmark_sim.config import SimConfig
 from .planner import AStarPlanner
 from .robot import RobotShell, StepResult
+from .scenario_loader import validate_scenario
 from .types import TrialScenario
 from .world import World
 
@@ -33,6 +35,7 @@ class TrialState:
     clock_s: float = 0.0
     events_processed: int = 0
     done: bool = False
+    host_runtime_ns: int = 0
 
 
 @dataclass
@@ -57,6 +60,12 @@ class AsyncTrialRunner:
         self.seed = seed
 
     def new_trial(self, scenario: TrialScenario) -> TrialState:
+        validate_scenario(
+            scenario,
+            grid_size=self.cfg.grid_size,
+            start_positions=self.cfg.start_positions,
+            trial_mode=self.cfg.trial_mode,
+        )
         bus = MessageBus(
             model=self.comm_model,
             delay_s=self.cfg.comm_delay_s,
@@ -84,6 +93,8 @@ class AsyncTrialRunner:
                 bus=bus,
                 allocator=allocator,
             )
+        for robot in robots.values():
+            robot.observe_initial_cell(0.0)
         return TrialState(cfg=self.cfg, scenario=scenario, world=world, robots=robots, bus=bus, planner=planner)
 
     def initial_queue(self, state: TrialState) -> List[WakeEvent]:
@@ -97,25 +108,29 @@ class AsyncTrialRunner:
         return q
 
     def run_trial(self, scenario: TrialScenario, on_step: Optional[Callable[[TrialState, RobotShell, StepResult], None]] = None) -> TrialState:
+        host_started_ns = perf_counter_ns()
         state = self.new_trial(scenario)
-        if self._coverage_complete(state):
-            state.done = True
-            return state
-        q = self.initial_queue(state)
-        order = len(q)
-        while q:
-            processed, order = self.process_next_event(state, q, order)
-            if processed is None:
-                break
-            robot = state.robots[processed.rid]
-            result = processed.result
-            if on_step:
-                on_step(state, robot, result)
+        try:
             if self._coverage_complete(state):
                 state.done = True
-            if state.done:
-                break
-        return state
+                return state
+            q = self.initial_queue(state)
+            order = len(q)
+            while q:
+                processed, order = self.process_next_event(state, q, order)
+                if processed is None:
+                    break
+                robot = state.robots[processed.rid]
+                result = processed.result
+                if on_step:
+                    on_step(state, robot, result)
+                if self._coverage_complete(state):
+                    state.done = True
+                if state.done:
+                    break
+            return state
+        finally:
+            state.host_runtime_ns = max(0, perf_counter_ns() - host_started_ns)
 
     def process_next_event(
         self,

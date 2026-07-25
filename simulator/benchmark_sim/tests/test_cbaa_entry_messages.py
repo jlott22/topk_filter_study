@@ -294,6 +294,34 @@ class CBAAEntryMessageTests(unittest.TestCase):
         self.assertIsNone(winners[cell])
         self.assertEqual(bids[cell], CBAAAllocator.NO_BID)
 
+    def test_release_without_a_real_released_bid_does_not_clear_owner(self) -> None:
+        state = _state(grid_size=3, robot_ids=["00", "01", "02"])
+        receiver = state.robots["02"]
+        receiver.belief.add_clue((1, 1))
+        cell = (1, 2)
+        receiver.allocator._ensure_cbaa_state(receiver)
+        winners = getattr(receiver, "cbaa_winner_by_cell")
+        bids = getattr(receiver, "cbaa_winning_bid_by_cell")
+
+        for released_fields in (
+            {},
+            {"released_bid": CBAAAllocator.NO_BID},
+        ):
+            winners[cell] = "00"
+            bids[cell] = -5.0
+            receiver._deliver_allocator_payload({
+                "type": "cbaa_entry",
+                "sender": "01",
+                "x": cell[0],
+                "y": cell[1],
+                "winner": None,
+                "bid": CBAAAllocator.NO_BID,
+                "released_winner": "00",
+                **released_fields,
+            })
+            self.assertEqual(winners[cell], "00")
+            self.assertEqual(bids[cell], -5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

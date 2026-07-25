@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from time import perf_counter_ns
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from benchmark_sim.algorithms.base import AllocatorBase
@@ -13,6 +14,9 @@ from .belief import BeliefMap
 from .planner import AStarPlanner
 from .types import Cell, DIRS4, Heading, Observation, in_bounds
 from .world import World
+
+
+_UNPUBLISHED_COLLISION_INTENT = object()
 
 
 @dataclass
@@ -69,7 +73,7 @@ class RobotShell:
         self._collision_event_counted_since_move = False
         self._blocked_goal_failures: Dict[Cell, int] = {}
         self._temporary_invalid_task_until: Dict[Cell, float] = {}
-        self._communicated_collision_intent: Optional[Cell] = None
+        self._communicated_collision_intent: object = _UNPUBLISHED_COLLISION_INTENT
         self._last_published_state_pos: Optional[Cell] = None
         self._now: float = 0.0
         self.pending_actions: Deque[PendingAction] = deque()
@@ -164,13 +168,9 @@ class RobotShell:
         self._publish("collision_intent", payload)
 
     def _set_collision_intent(self, intent: Optional[Cell]) -> None:
-        if intent is None:
-            if self._communicated_collision_intent is None:
-                return
-            self._communicated_collision_intent = None
-            self.publish_collision_intent(None)
-            return
-        normalized = (int(intent[0]), int(intent[1]))
+        normalized = (
+            None if intent is None else (int(intent[0]), int(intent[1]))
+        )
         if self._communicated_collision_intent == normalized:
             return
         self._communicated_collision_intent = normalized
@@ -207,11 +207,11 @@ class RobotShell:
         if category == "collision_intent":
             loc = _payload_cell(payload.get("loc"))
             intent = _payload_cell(payload.get("intent")) if payload.get("intent") is not None else None
-            if intent is not None and in_bounds(intent, self.grid_size):
-                self._collision_peer_positions[sender] = intent
-                self._collision_peer_intents[sender] = intent
-            elif loc is not None and in_bounds(loc, self.grid_size):
+            if loc is not None and in_bounds(loc, self.grid_size):
                 self._collision_peer_positions[sender] = loc
+            if intent is not None and in_bounds(intent, self.grid_size):
+                self._collision_peer_intents[sender] = intent
+            else:
                 self._collision_peer_intents.pop(sender, None)
             return
         if category in {
@@ -227,6 +227,39 @@ class RobotShell:
             return
         self.allocator.handle_message(self, message)
 
+    def observe_initial_cell(self, now_s: float = 0.0) -> StepResult:
+        """Sense the already-recorded start cell without creating a move/visit."""
+
+        self._now = float(now_s)
+        found_clue = self.world.detect_clue(self.rid, self.pos, self._now)
+        new_clue = False
+        if found_clue:
+            new_clue = self.belief.add_clue(self.pos)
+            self.last_event = "clue_found"
+
+        found_target = self.world.detect_target(self.rid, self.pos, self._now)
+        observation = Observation(
+            time_s=self._now,
+            cell=self.pos,
+            searched=True,
+            clue_detected=found_clue,
+            target_detected=found_target,
+        )
+        self.allocator.on_observation(self, observation)
+
+        if new_clue:
+            self.publish_clue(self.pos)
+        if found_target:
+            self.publish_target(self.pos)
+            self.last_event = "target_found"
+
+        self._publish_allocator_messages()
+        return StepResult(
+            reason=self.last_event,
+            found_target=found_target,
+            found_clue=found_clue,
+        )
+
     def step(self, now_s: float, planner: AStarPlanner) -> StepResult:
         self._now = now_s
         self._expire_temporary_invalid_tasks()
@@ -236,11 +269,16 @@ class RobotShell:
 
         return self._plan_next_action(planner)
 
-    def _plan_next_action(self, planner: AStarPlanner) -> StepResult:
+    def _plan_next_action(
+        self,
+        planner: AStarPlanner,
+        *,
+        collision_replan: bool = False,
+    ) -> StepResult:
         (
             plan_peer_positions,
-            plan_collision_positions,
-            plan_collision_intents,
+            _plan_collision_positions,
+            _plan_collision_intents,
         ) = self._promote_perception()
 
         previous_task = self.current_goal
@@ -253,9 +291,19 @@ class RobotShell:
         if self.current_goal is None or self.current_goal in self.belief.searched:
             self.current_goal = None
             self._active_peer_positions = plan_peer_positions
+            allocator_started_ns = perf_counter_ns()
+            allocation_active = self._allocation_active()
             try:
                 decision = self.allocator.choose_goal(self)
             finally:
+                allocator_elapsed_ns = max(0, perf_counter_ns() - allocator_started_ns)
+                self.counters.allocator_time_ns_samples.append(allocator_elapsed_ns)
+                phase_samples = (
+                    self.counters.allocator_time_ns_post_clue
+                    if allocation_active
+                    else self.counters.allocator_time_ns_pre_clue
+                )
+                phase_samples.append(allocator_elapsed_ns)
                 self._active_peer_positions = None
                 self.collision_avoidance_active = False
             self.current_goal = decision.goal
@@ -291,6 +339,23 @@ class RobotShell:
             if len(path) < 2:
                 if self._post_clue_started():
                     self.counters.path_replans += 1
+                if (
+                    collision_replan
+                    and self._allocation_active()
+                    and self.current_goal is not None
+                    and self.current_goal in prior_temp_blocked_next
+                ):
+                    # The first protected conflict was already counted by
+                    # _complete_move. No alternate route exists while that
+                    # transition is blocked, so advertise the required
+                    # no-path clear but retain the goal/allocation and failure
+                    # count for a distinct second protected attempt.
+                    self._set_collision_intent(None)
+                    self.last_event = "path_failed"
+                    return StepResult(
+                        reason="path_failed",
+                        time_cost_s=self.cfg.replan_delay_s,
+                    )
                 if self.current_goal is not None and self.current_goal in prior_temp_blocked_next:
                     backoff = self._maybe_temporarily_invalidate_blocked_goal(self.current_goal)
                     if backoff is not None:
@@ -301,18 +366,17 @@ class RobotShell:
                 return StepResult(reason="path_failed", time_cost_s=self.cfg.replan_delay_s)
 
             next_cell = path[1]
-            if not self._collision_blocked_by(next_cell, plan_collision_positions, plan_collision_intents):
-                self.temp_blocked_next.clear()
-                self.last_next_cell = next_cell
-                self._queue_actions_for_next_cell(next_cell)
-                self._set_collision_intent(next_cell)
-                return self._execute_pending_action(planner)
-
-            self._record_collision_prevention(next_cell)
-            backoff = self._maybe_temporarily_invalidate_blocked_goal(next_cell)
-            if backoff is not None:
-                return backoff
-            blocked.add(next_cell)
+            # Route planning uses delivered droppable peer positions. Protected
+            # positions/intents are rechecked only after the changed intent has
+            # been published and its settle action has completed. This mirrors
+            # the physical publish -> turn -> settle/service -> safety-check
+            # boundary. A conflict found in _complete_move is added to
+            # temp_blocked_next before this method replans an alternate route.
+            self.temp_blocked_next.clear()
+            self.last_next_cell = next_cell
+            self._queue_actions_for_next_cell(next_cell)
+            self._set_collision_intent(next_cell)
+            return self._execute_pending_action(planner)
 
         self.current_goal = None
         self._set_collision_intent(None)
@@ -387,7 +451,7 @@ class RobotShell:
             if backoff is not None:
                 return backoff
             if planner is not None:
-                return self._plan_next_action(planner)
+                return self._plan_next_action(planner, collision_replan=True)
             self.last_event = "path_failed"
             return StepResult(reason="path_failed", time_cost_s=self.cfg.replan_delay_s)
 

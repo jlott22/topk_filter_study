@@ -10,6 +10,7 @@ EAST: Heading = (1, 0)
 NORTH: Heading = (0, 1)
 SOUTH: Heading = (0, -1)
 WEST: Heading = (-1, 0)
+LOGIC_REVISION = "dcta_parity_v1"
 
 
 def generate_robot_ids(num_robots: int) -> List[str]:
@@ -86,6 +87,13 @@ class SimConfig:
     # Optional sensitivity-study controls. None preserves allocator defaults.
     commitment_horizon: Optional[int] = None
     max_candidate_cells: Optional[int] = None
+    top_k_rate: Optional[float] = None
+
+    # Additive run-provenance fields.
+    logic_revision: str = LOGIC_REVISION
+    study_profile: str = "custom"
+    scenario_file_sha256: str = ""
+    scenario_selection_sha256: str = ""
 
     def __post_init__(self) -> None:
         if not self.robot_ids:
@@ -105,6 +113,33 @@ class SimConfig:
             raise ValueError(f"missing start headings for robots: {sorted(missing_headings)}")
         if self.collision_goal_backoff_max_s <= 0:
             raise ValueError("collision_goal_backoff_max_s must be positive")
+        if self.top_k_rate is not None and not (0.0 < self.top_k_rate <= 1.0):
+            raise ValueError("top_k_rate must be greater than 0 and at most 1")
+        if self.study_profile not in {"custom", "topk_filter"}:
+            raise ValueError(f"unsupported study_profile: {self.study_profile}")
+        if self.study_profile == "topk_filter":
+            canonical_ids = generate_robot_ids(4)
+            canonical_starts = edge_even_start_positions(19, canonical_ids)
+            violations = []
+            if self.trial_mode != "clue_search":
+                violations.append("trial_mode must be clue_search")
+            if self.grid_size != 19:
+                violations.append("grid_size must be 19")
+            if self.robot_ids != canonical_ids:
+                violations.append("robot_ids must be 00,01,02,03")
+            if self.robot_start_layout != "edge_even":
+                violations.append("robot_start_layout must be edge_even")
+            if self.start_positions != canonical_starts:
+                violations.append("start_positions must use canonical edge-even starts")
+            if self.start_headings != {rid: EAST for rid in canonical_ids}:
+                violations.append("all start_headings must be east")
+            if self.commitment_horizon != 3:
+                violations.append("commitment_horizon must be 3")
+            if violations:
+                raise ValueError(
+                    "topk_filter study profile requires canonical controls: "
+                    + "; ".join(violations)
+                )
 
     def to_dict(self):
         return asdict(self)

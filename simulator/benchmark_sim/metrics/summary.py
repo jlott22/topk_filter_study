@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import ceil
+from statistics import median
 from typing import Dict, List
 
 from benchmark_sim.core.scheduler import TrialState
@@ -35,6 +37,102 @@ def gini(values: List[float]) -> float:
     return (2.0 * weighted) / (n * total) - (n + 1.0) / n
 
 
+def _runtime_stats_ms(samples_ns: List[int]) -> dict:
+    samples_ms = sorted(max(0, value) / 1_000_000.0 for value in samples_ns)
+    if not samples_ms:
+        return {
+            "calls": 0,
+            "total": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "p95": 0.0,
+            "max": 0.0,
+        }
+    total = sum(samples_ms)
+    p95_index = max(0, ceil(0.95 * len(samples_ms)) - 1)
+    return {
+        "calls": len(samples_ms),
+        "total": total,
+        "mean": total / len(samples_ms),
+        "median": float(median(samples_ms)),
+        "p95": samples_ms[p95_index],
+        "max": samples_ms[-1],
+    }
+
+
+def build_computational_performance_rows(
+    state: TrialState,
+    algorithm_name: str,
+    comm_model: str,
+    comm_level: str,
+    scenario_file: str,
+) -> list[dict]:
+    """Return per-robot host-runtime statistics for allocator.choose_goal calls."""
+
+    host_runtime_ms = max(0, state.host_runtime_ns) / 1_000_000.0
+    common = {
+        "trial_id": state.world.scenario.trial_id,
+        "logic_revision": state.cfg.logic_revision,
+        "study_profile": state.cfg.study_profile,
+        "scenario_file_sha256": state.cfg.scenario_file_sha256,
+        "scenario_selection_sha256": state.cfg.scenario_selection_sha256,
+        "algorithm": algorithm_name,
+        "comm_model": comm_model,
+        "comm_level": comm_level,
+        "trial_mode": getattr(state.cfg, "trial_mode", "clue_search"),
+        "grid_size": state.cfg.grid_size,
+        "grid_cells": state.cfg.grid_size * state.cfg.grid_size,
+        "robot_count": len(state.cfg.robot_ids),
+        "top_k_rate": state.cfg.top_k_rate,
+        "top_k_max_cells": (
+            state.cfg.max_candidate_cells
+            if state.cfg.max_candidate_cells is not None
+            else state.cfg.grid_size * state.cfg.grid_size
+        ),
+        "max_candidate_cells": state.cfg.max_candidate_cells,
+        "condition_id": state.cfg.condition_id,
+        "scenario_file": scenario_file,
+        "host_trial_runtime_ms": host_runtime_ms,
+    }
+
+    rows: list[dict] = []
+    for rid, robot in sorted(state.robots.items()):
+        counters = robot.counters
+        overall = _runtime_stats_ms(counters.allocator_time_ns_samples)
+        candidate_filter = _runtime_stats_ms(counters.candidate_filter_time_ns_samples)
+        pre_clue = _runtime_stats_ms(counters.allocator_time_ns_pre_clue)
+        post_clue = _runtime_stats_ms(counters.allocator_time_ns_post_clue)
+        rows.append({
+            **common,
+            "robot_id": rid,
+            "allocator_calls": overall["calls"],
+            "allocator_calls_pre_clue": pre_clue["calls"],
+            "allocator_calls_post_clue": post_clue["calls"],
+            "allocator_time_ms_total": overall["total"],
+            "allocator_time_ms_mean": overall["mean"],
+            "allocator_time_ms_median": overall["median"],
+            "allocator_time_ms_p95": overall["p95"],
+            "allocator_time_ms_max": overall["max"],
+            "allocator_time_pct": (
+                overall["total"] * 100.0 / host_runtime_ms
+                if host_runtime_ms > 0.0
+                else 0.0
+            ),
+            "candidate_filter_calls": candidate_filter["calls"],
+            "candidate_filter_time_ms_total": candidate_filter["total"],
+            "candidate_filter_time_ms_mean": candidate_filter["mean"],
+            "candidate_filter_time_ms_max": candidate_filter["max"],
+            "allocator_time_ms_pre_clue_total": pre_clue["total"],
+            "allocator_time_ms_post_clue_total": post_clue["total"],
+            "allocator_host_runtime_pct": (
+                overall["total"] * 100.0 / host_runtime_ms
+                if host_runtime_ms > 0.0
+                else 0.0
+            ),
+        })
+    return rows
+
+
 def build_rows(state: TrialState, algorithm_name: str, comm_model: str, comm_level: str, scenario_file: str) -> tuple[dict, dict, list[dict]]:
     world = state.world
     robots = state.robots
@@ -56,12 +154,22 @@ def build_rows(state: TrialState, algorithm_name: str, comm_model: str, comm_lev
 
     common_metadata = {
         "trial_id": world.scenario.trial_id,
+        "logic_revision": state.cfg.logic_revision,
+        "study_profile": state.cfg.study_profile,
+        "scenario_file_sha256": state.cfg.scenario_file_sha256,
+        "scenario_selection_sha256": state.cfg.scenario_selection_sha256,
         "algorithm": algorithm_name,
         "comm_model": comm_model,
         "comm_level": comm_level,
         "grid_size": state.cfg.grid_size,
         "grid_cells": state.cfg.grid_size * state.cfg.grid_size,
         "robot_count": len(state.cfg.robot_ids),
+        "top_k_rate": state.cfg.top_k_rate,
+        "top_k_max_cells": (
+            state.cfg.max_candidate_cells
+            if state.cfg.max_candidate_cells is not None
+            else state.cfg.grid_size * state.cfg.grid_size
+        ),
         "target_cells_per_robot": state.cfg.target_cells_per_robot,
         "actual_cells_per_robot": state.cfg.actual_cells_per_robot,
         "condition_id": state.cfg.condition_id,

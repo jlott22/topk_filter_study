@@ -16,6 +16,69 @@ For each change, add:
 
 ## Change Entries
 
+### 2026-07-24 - Aligned Protected-Collision Timing and Empty DGA Clears
+
+- Area: simulation architecture, collision safety, DGA, tests
+- Files changed: `core/robot.py`, `algorithms/DGA.py`, `tests/test_async_movement.py`, `tests/test_dga_integration.py`, the corresponding canonical-simulator files, and hardware collision/DGA parity files
+- Summary: Moved the protected current-position/intent recheck to the post-intent safety boundary and made empty DGA plans publish finite, receiver-valid prefix clears.
+- Rationale: The physical protocol publishes a changed intent, turns, services communications for its settle window, and only then performs the protected recheck. The earlier simulator precheck skipped the attempted intent. DGA peers reject non-finite fitness, so an infinite-fitness empty clear could not clear a prior prefix.
+- Behavior impact: When droppable peer state is absent but a protected conflict is known, the simulator now advertises the attempted transition and then the alternate transition, matching hardware. A first conflict with no alternate route emits a no-path clear, retains the goal and failure state, and makes a distinct second protected attempt before collision backoff. Empty DGA plans use fitness `0.0`, emit changed owner-prefix clears, and are accepted by receivers.
+- Follow-up notes: Controlled regressions assert the protected intent sequence, two-conflict backoff, finite DGA clear reception, and parity between both simulator repositories. Physical timing and transport validation remain required.
+
+### 2026-07-24 - Made Belief Normalization Cache-Safe and Revision Framing-Safe
+
+- Area: algorithm, belief state, configuration, transport, tests
+- Files changed: `core/belief.py`, `algorithms/base.py`, `config.py`, probability-consistency tests, and the corresponding canonical-simulator files
+- Summary: Added a monotonic belief revision to every posterior rebuild and keyed the allocator's full-map maximum cache by belief object plus revision. Changed the logic-revision token to delimiter-safe `dcta_parity_v1`.
+- Rationale: CPython may reuse a discarded probability dictionary's object ID, so caching only by `id(target_p)` could reuse a stale maximum after a miss or clue. The hardware UART framing uses `-` as a terminator, so a hyphenated revision token could be truncated in transit.
+- Behavior impact: Every belief mutation now refreshes the exact full-map normalization maximum used by `q(c)` and therefore by `J(a,c)`. Configuration frames round-trip the complete logic revision through the existing ESP32/Pololu transport.
+- Follow-up notes: Regression tests force dictionary-ID reuse-sensitive update sequences and reject delimiter-bearing configuration fields. Physical binary64, heap, and transport gates remain required.
+
+### 2026-07-24 - Aligned Startup, Scenario, and Consensus Parity
+
+- Area: simulation architecture, algorithm, configuration, scenarios, tests, documentation
+- Files changed: `core/robot.py`, `core/scheduler.py`, `core/scenario_loader.py`, `algorithms/CBAA.py`, `algorithms/DGA.py`, `algorithms/PI.py`, `config.py`, `run_trials.py`, startup/algorithm tests, `../scenarios/final_trial_500.csv`, and `../README.md`
+- Summary: Added deterministic time-zero start-cell sensing after full robot registration, strict scenario validation, ordered selection hashes with an optional required-hash preflight, an automatic cross-condition scenario-manifest lock for the canonical Top-K study profile, strict CBAA release-bid matching, PI path-head goal synchronization and exact positive-maximum normalization, exact DGA `(sender, generation, solution_id)` prediction assessment and owner-prefix delta/clear semantics, separate protected peer current-position/intent storage, duplicate searched-cell suppression, and an explicit unpublished collision-intent state.
+- Rationale: Simulation runs and hardware replays need the same valid scenario set, startup observation semantics, configuration provenance, consensus goals, prediction-strike lifecycle, and collision snapshot.
+- Behavior impact: Start-cell clues are now detected at time zero without a step or second visit, in the order belief update, allocator observation hook, clue publication, and allocator publication; duplicate reports of a searched peer cell no longer recompute belief; the first no-goal/no-route condition sends one protected current-cell/no-next clear while later unchanged clears remain deduplicated; Top-K study conditions cannot silently use different ordered scenario selections; targets on starts and non-integer/duplicate/out-of-bounds scenario data fail before execution; a CBAA release now requires the same winner and `local_bid <= released_bid + EPS`, so a missing/`NO_BID` field is not a wildcard; PI immediately follows a repaired path head and retains any finite positive full-map maximum even below `EPS`; distinct same-generation DGA solutions are each assessed once, unchanged owner prefixes are omitted across solution IDs, disappeared owners receive one empty clear, and exclusion remains permanent after three strikes; protected collision safety uses the advertised current cell rather than misclassifying the next intent as the current position. Target-on-start trials 172, 203, and 494 in `final_trial_500.csv` were replaced.
+- Follow-up notes: The repaired scenario file raw SHA-256 is `9139f6a4fa259016f0e650489d605333758491b62151a742e406cc17dd5df085`; ordered-selection hashes are `823213c90703fd83224ad7122ee730ba64af3769ea517af252103bddd907f681` for all 500 and `33ddd00e9e07f86e272c4a946f91c9a9c4ee08ae6e902309b63caa0c5a8d5fa4` for the first 300. Headless outputs carry the logic revision plus raw and selection hashes, and the Top-K profile automatically enforces `results/topk_simulation_scenario_manifest.json`. Physical MicroPython checking, RP2040 `K=361` memory probes, and four-robot smoke trials at `K=361`, `K=18`, and an intermediate K remain required before the production campaign.
+
+### 2026-07-24 - Promoted Memory-Bounded ACBBA, CBAA, HIPC, and PI
+
+- Area: algorithm, performance, hardware, tests, documentation
+- Files changed: `algorithms/ACBBA.py`, `algorithms/CBAA.py`, `algorithms/HIPC.py`, `algorithms/PI.py`, `algorithms/memory_optimized.py`, their compatibility `_optimized.py` modules, `tests/test_allocator_memory_optimized_equivalence.py`, `tests/benchmark_allocator_memory_optimization.py`, corresponding `../../hardware/Pololu_*.py` files, `../../hardware/allocator_memory.py`, hardware parity tests, and archived baselines
+- Summary: Promoted packed candidate selection, fixed cell-indexed consensus tables, reusable route calculations, and bounded team-planning storage for ACBBA, CBAA, HIPC, and PI after archived-original parity passed.
+- Rationale: The former tuple-ranked Top-K construction and growing cell-keyed dictionaries create avoidable peak allocation and fragmentation risk on RP2040 MicroPython.
+- Behavior impact: Randomized decisions, paths, consensus state, messages, production Top-K 271 results, and complete four-robot simulator traces match the reference implementations. Internal representation and host execution time changed; algorithm objectives and public decisions did not.
+- Follow-up notes: CPython candidate peak allocation fell by approximately 72-81%, while interpreted candidate filtering became approximately 5.6-7.9 times slower in the recorded host run. Physical RP2040 heap and timing validation remains required. Existing simulator-to-hardware scoring differences were intentionally not changed in this memory pass.
+
+### 2026-07-24 - Promoted Compact DGA and Ported It to Pololu
+
+- Area: algorithm, hardware, performance, tests, documentation
+- Files changed: `algorithms/DGA.py`, `algorithms/DGA_optimized.py`, `tests/test_dga_optimized_equivalence.py`, `tests/dga_optimization/benchmark_dga_optimized.py`, `../../hardware/Pololu_DGA.py`, `../../hardware/test_dga_simulator_equivalence.py`, `../../archive/DGA_simulator_unoptimized.py`, `../../archive/Pololu_DGA_unoptimized.py`
+- Summary: Made the compact-population implementation the simulator's standard `DGAAllocator`, archived the former simulator and Pololu defaults, and ported the compact population lifecycle to the active MicroPython implementation.
+- Rationale: The duplicate produced equivalent seeded search results with substantially lower allocation pressure, so it is now the implementation used by ordinary simulator and hardware paths.
+- Behavior impact: DGA parameters, objective, seed preparation, tournament selection, crossover, mutation, repair, solution selection, and messaging are unchanged. Internal populations now use 16-bit packed cell IDs and route lengths; plans are unpacked at the unchanged genetic-operator boundary.
+- Follow-up notes: Desktop equivalence tests cover all operators and a complete 25-generation hardware-style search. Physical RP2040 heap and timing measurements are still required.
+
+### 2026-07-24 - Added Compact-Population DGA Duplicate
+
+- Area: algorithm, performance, tests, documentation
+- Files changed: `algorithms/DGA_optimized.py`, `tests/test_dga_optimized_equivalence.py`, `tests/dga_optimization/benchmark_dga_optimized.py`, `../README.md`
+- Summary: Preserved the reference DGA and added an optimized duplicate that stores population plans as packed unsigned cell IDs, ranks compact plans without nested signature objects, retains only the best population-size preparation plans, skips idempotent population repairs, and avoids redundant tournament/child copies.
+- Rationale: The simulator-equivalent population size and generation count create excessive Python object allocation for an RP2040-oriented hardware port. The duplicate evaluates whether representation-only changes can lower memory without changing the DGA search.
+- Behavior impact: Seeded tests and production-grid benchmarks produced identical candidates, goals, best plans, fitness values, generation counts, pending deltas, and ordered final populations. This entry records the evaluation stage before the later default-path promotion.
+- Follow-up notes: On the controlled host benchmark, median first-allocation runtime improved by approximately 1.9-2.4 times and traced peak allocation fell by approximately 3.5-10.1 times over tested Top-K limits from 18 through 361. CPython allocation measurements are comparative and are not RP2040 heap measurements.
+
+### 2026-07-24 - Added Host Allocator Runtime Export
+
+- Area: metrics, simulation architecture, tests, documentation
+- Files changed: `core/robot.py`, `core/scheduler.py`, `metrics/counters.py`, `metrics/summary.py`, `metrics/export.py`, `run_trials.py`, `tests/test_computational_performance.py`, `../README.md`
+- Summary: Timed every allocator `choose_goal()` call with the host high-resolution clock and added per-robot aggregate latency statistics in the separate `computational_performance.csv` output.
+- Rationale: Allocation performance needs to be evaluated as host computation rather than conflated with simulated mission time.
+- Behavior impact: Simulation decisions and simulated timing are unchanged. Headless runs now retain allocation call count, total/mean/median/p95/maximum host latency, phase totals, total host trial runtime, and allocator host-runtime percentage.
+- Follow-up notes: Host timings depend on the machine and workload running the trials, so comparisons should use a controlled execution environment.
+
 ### 2026-07-21 - Corrected Gilbert-Elliott Burst Persistence
 
 - Area: communication, configuration, tests, documentation

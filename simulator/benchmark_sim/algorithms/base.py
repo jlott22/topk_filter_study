@@ -1,11 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import wraps
 from math import isfinite
+from time import perf_counter_ns
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 from benchmark_sim.core.types import AllocationDecision, Cell, Observation
 from benchmark_sim.comms.message import Message
+
+
+def timed_candidate_filter(method):
+    """Record the full candidate discovery, ranking, and truncation call."""
+
+    @wraps(method)
+    def wrapper(self, robot, *args, **kwargs):
+        started_ns = perf_counter_ns()
+        try:
+            return method(self, robot, *args, **kwargs)
+        finally:
+            counters = getattr(robot, "counters", None)
+            samples = getattr(counters, "candidate_filter_time_ns_samples", None)
+            if samples is not None:
+                samples.append(max(0, perf_counter_ns() - started_ns))
+
+    return wrapper
 
 
 class RobotAPI(Protocol):
@@ -181,7 +200,19 @@ class AllocatorBase:
         if maximum <= 0.0 or not isfinite(maximum):
             maximum = 1.0
 
+        belief = getattr(robot, "belief", None)
+        belief_revision = getattr(belief, "revision", None)
         setattr(robot, "_allocation_probability_source_id", id(target_p))
+        setattr(
+            robot,
+            "_allocation_probability_belief_id",
+            id(belief) if belief_revision is not None else None,
+        )
+        setattr(
+            robot,
+            "_allocation_probability_belief_revision",
+            belief_revision,
+        )
         setattr(robot, "_allocation_probability_normalizer", float(maximum))
         return float(maximum)
 
@@ -191,7 +222,26 @@ class AllocatorBase:
         target_p = getattr(robot, "target_p", {}) or {}
         source_id = getattr(robot, "_allocation_probability_source_id", None)
         normalizer = getattr(robot, "_allocation_probability_normalizer", None)
-        if source_id != id(target_p) or normalizer is None:
+        belief = getattr(robot, "belief", None)
+        belief_revision = getattr(belief, "revision", None)
+        if belief_revision is None:
+            cache_is_current = source_id == id(target_p)
+        else:
+            cache_is_current = (
+                getattr(
+                    robot,
+                    "_allocation_probability_belief_id",
+                    None,
+                )
+                == id(belief)
+                and getattr(
+                    robot,
+                    "_allocation_probability_belief_revision",
+                    None,
+                )
+                == belief_revision
+            )
+        if not cache_is_current or normalizer is None:
             normalizer = self._refresh_allocation_probability_normalizer(robot)
 
         try:

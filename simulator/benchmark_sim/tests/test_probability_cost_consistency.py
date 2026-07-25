@@ -9,6 +9,7 @@ from benchmark_sim.algorithms.DGA import DGAAllocator
 from benchmark_sim.algorithms.DMCHBA import DMCHBAAllocator
 from benchmark_sim.algorithms.HIPC import HIPCAllocator
 from benchmark_sim.algorithms.PI import PIAllocator
+from benchmark_sim.core.belief import BeliefMap
 
 
 class ProbabilityCostConsistencyTests(unittest.TestCase):
@@ -88,6 +89,47 @@ class ProbabilityCostConsistencyTests(unittest.TestCase):
         self.assertAlmostEqual(
             dga._edge_cost(self.robot, self.robot.pos, self.low),
             expected_low_cost,
+        )
+
+    def test_normalizer_cache_tracks_belief_revision_not_reused_dict_id(self) -> None:
+        class RevisionRobot:
+            def __init__(self) -> None:
+                self.pos = (0, 0)
+                self.grid_size = 19
+                self.cfg = SimpleNamespace(trial_mode="clue_search")
+                self.belief = BeliefMap(19)
+
+            @property
+            def target_p(self):
+                return self.belief.target_p
+
+        robot = RevisionRobot()
+        robot.belief.add_clue((0, 0))
+        allocator = CBAAAllocator()
+        probe = (18, 18)
+        allocator._normalized_allocation_probability(robot, probe)
+        cached_revision = robot._allocation_probability_belief_revision
+
+        # Two rebuilds are deliberate: CPython can reuse the first target_p
+        # dictionary's address, so object identity alone is not a cache key.
+        robot.belief.mark_searched((1, 0))
+        robot.belief.mark_searched((2, 0))
+        expected_maximum = max(robot.target_p.values())
+        expected_probability = robot.target_p[probe] / expected_maximum
+
+        self.assertGreater(robot.belief.revision, cached_revision)
+        self.assertAlmostEqual(
+            allocator._normalized_allocation_probability(robot, probe),
+            expected_probability,
+            places=15,
+        )
+        self.assertEqual(
+            robot._allocation_probability_belief_revision,
+            robot.belief.revision,
+        )
+        self.assertEqual(
+            robot._allocation_probability_normalizer,
+            expected_maximum,
         )
 
 

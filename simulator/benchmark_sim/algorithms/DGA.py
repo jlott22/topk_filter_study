@@ -6,7 +6,7 @@ import hashlib
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from benchmark_sim.algorithms.base import AllocatorBase
+from benchmark_sim.algorithms.base import AllocatorBase, timed_candidate_filter
 from benchmark_sim.core.types import AllocationDecision, Cell
 
 
@@ -121,9 +121,11 @@ class DGAAllocator(AllocatorBase):
         setattr(robot, "dga_last_team_size", len(team_agents))
 
         if not candidates or not team_agents:
-            setattr(robot, "dga_path", [])
-            setattr(robot, "dga_best_plan", {self._rid_key(robot.rid): []})
-            setattr(robot, "dga_best_fitness", math.inf)
+            empty_plan = {self._rid_key(robot.rid): []}
+            self._commit_best_plan(
+                robot, empty_plan, 0.0, trigger
+            )
+            setattr(robot, "dga_population", [])
             return
 
         population = self._prepare_population(robot, team_agents, candidates)
@@ -480,8 +482,12 @@ class DGAAllocator(AllocatorBase):
         setattr(robot, "dga_best_fitness", float(fitness))
         setattr(robot, "dga_path", new_path)
         setattr(robot, "dga_last_reallocation_trigger", trigger)
+        # The queue performs owner-prefix deduplication against what was
+        # actually sent.  Always give it the final committed plan so an empty
+        # plan can clear previously advertised prefixes even when the stored
+        # best-plan signature was already empty.
+        self._queue_dga_deltas(robot, plan, float(fitness))
         if new_signature != previous_signature:
-            self._queue_dga_deltas(robot, plan, float(fitness))
             setattr(robot, "dga_last_assignment_signature", new_signature)
 
         peer_first = {
@@ -495,6 +501,7 @@ class DGAAllocator(AllocatorBase):
     # Candidate cells and local team construction
     # ------------------------------------------------------------------
 
+    @timed_candidate_filter
     def _candidate_cells(self, robot: Any) -> List[Cell]:
         grid_size = self._grid_size(robot)
         origin = self._robot_pos(robot)
@@ -536,14 +543,13 @@ class DGAAllocator(AllocatorBase):
         return team
 
     def _queue_dga_deltas(self, robot: Any, plan: Dict[str, List[Cell]], fitness: float) -> None:
-        """Queue one-cell DGA messages that fully describe each owner prefix.
+        """Queue one-cell messages only for changed owner prefixes.
 
         DGA messages remain one path position per published message, matching the
-        other allocation protocols' cell-level drop granularity. For a new
-        solution id, every committed prefix cell is sent, not just the positions
-        changed from an older solution. If an owner has an empty prefix, one
-        explicit clear message is sent so receivers do not carry forward stale
-        cells from that owner.
+        other allocation protocols' cell-level drop granularity. Prefix
+        signatures are owner-keyed and therefore survive solution-id changes.
+        Owners present in the last sent snapshot but absent from the current
+        plan emit one explicit empty clear.
         """
 
         solution_id = self._solution_id(plan, int(getattr(robot, "dga_generation", 0)), fitness)
@@ -551,15 +557,21 @@ class DGAAllocator(AllocatorBase):
         timestamp = self._next_delta_time(robot)
         last_sent = getattr(robot, "dga_last_sent_signatures", {}) or {}
         pending: List[dict] = []
+        plan_by_owner = {
+            str(owner): route
+            for owner, route in plan.items()
+        }
+        owners = set(plan_by_owner)
+        owners.update(str(owner) for owner in last_sent)
 
-        for owner in sorted(plan.keys(), key=self._robot_id_key):
+        for owner in sorted(owners, key=self._robot_id_key):
             commitment_horizon = self._planning_horizon(robot, self.COMMITMENT_HORIZON)
-            prefix = self._normalize_cell_list(plan.get(owner, []))[:commitment_horizon]
+            prefix = self._normalize_cell_list(plan_by_owner.get(owner, []))[:commitment_horizon]
             sent_key = self._delta_signature_key(solution_id, owner)
-            already_sent_for_solution = sent_key in last_sent
+            already_sent = sent_key in last_sent
             previous_prefix = tuple(last_sent.get(sent_key, tuple()) or tuple())
             path_signature = self._path_signature(prefix)
-            if already_sent_for_solution and previous_prefix == path_signature:
+            if already_sent and previous_prefix == path_signature:
                 continue
 
             if not prefix:
@@ -692,8 +704,16 @@ class DGAAllocator(AllocatorBase):
         ):
             return
 
-        path = self._owner_path_from_received(robot, sender, solution_id, owner)
-        self._update_prediction_quality_from_entry(robot, sender, solution_id, owner, path)
+        self._update_prediction_quality_from_entry(
+            robot,
+            sender,
+            solution_id,
+            generation,
+            owner,
+            order,
+            cell,
+            removed,
+        )
         plan = self._reconstruct_received_solution(robot, sender, solution_id)
         if not plan:
             return
@@ -875,41 +895,49 @@ class DGAAllocator(AllocatorBase):
         robot: Any,
         sender: Any,
         solution_id: str,
+        generation: int,
         owner: str,
-        path: List[Cell],
+        order: int,
+        cell: Optional[Cell],
+        removed: bool,
     ) -> None:
-        if self._same_robot_id(sender, robot.rid) or owner != self._rid_key(sender):
-            return
         sender_key = self._rid_key(sender)
-        if not path:
+        if (
+            self._same_robot_id(sender, robot.rid)
+            or owner != sender_key
+            or order != 0
+            or removed
+            or cell is None
+        ):
             return
-        actual_first = path[0]
 
-        seen = getattr(robot, "dga_seen_peer_plan_signature", {}) or {}
-        signature = (str(solution_id), self._path_signature(path))
-        if seen.get(sender_key) == signature:
+        assessed = getattr(robot, "dga_last_assessed_peer_solution", set()) or set()
+        assessment_key = (sender_key, int(generation), str(solution_id))
+        if assessment_key in assessed:
             return
-        seen[sender_key] = signature
-        setattr(robot, "dga_seen_peer_plan_signature", seen)
+        assessed.add(assessment_key)
+        setattr(robot, "dga_last_assessed_peer_solution", assessed)
 
         predicted = getattr(robot, "dga_last_predicted_peer_first_task", {}) or {}
         predicted_first = predicted.get(sender_key)
         if predicted_first is None:
             return
 
-        if self.manhattan(predicted_first[0], predicted_first[1], actual_first[0], actual_first[1]) <= self.PREDICTION_TOLERANCE_CELLS:
+        if self.manhattan(predicted_first[0], predicted_first[1], cell[0], cell[1]) <= self.PREDICTION_TOLERANCE_CELLS:
             self._record_good_prediction(robot, sender_key)
         else:
             self._record_bad_prediction(robot, sender_key)
 
     def _record_bad_prediction(self, robot: Any, peer_key: str) -> None:
         counts = getattr(robot, "dga_bad_prediction_count", {}) or {}
-        counts[peer_key] = int(counts.get(peer_key, 0)) + 1
+        counts[peer_key] = min(self.BAD_PRED_LIMIT, int(counts.get(peer_key, 0)) + 1)
         setattr(robot, "dga_bad_prediction_count", counts)
 
     def _record_good_prediction(self, robot: Any, peer_key: str) -> None:
         counts = getattr(robot, "dga_bad_prediction_count", {}) or {}
         current = int(counts.get(peer_key, 0))
+        if current >= self.BAD_PRED_LIMIT:
+            return
         counts[peer_key] = max(0, current - 1)
         setattr(robot, "dga_bad_prediction_count", counts)
 
@@ -930,6 +958,7 @@ class DGAAllocator(AllocatorBase):
             "dga_received_latest_owner_prefix": {},
             "dga_bad_prediction_count": {},
             "dga_last_predicted_peer_first_task": {},
+            "dga_last_assessed_peer_solution": set(),
             "dga_seen_peer_plan_signature": {},
             "dga_dropped_peers": set(),
             "dga_last_team_size": 1,
@@ -1261,4 +1290,12 @@ class DGAAllocator(AllocatorBase):
         return str(rid)
 
 
+# Preserve the original implementation as the behavioral reference used by the
+# compact default implementation.  The archived standalone snapshot lives at
+# archive/DGA_simulator_unoptimized.py.
+DGAReferenceAllocator = DGAAllocator
+
+from benchmark_sim.algorithms.DGA_optimized import DGAOptimizedAllocator
+
+DGAAllocator = DGAOptimizedAllocator
 Allocator = DGAAllocator

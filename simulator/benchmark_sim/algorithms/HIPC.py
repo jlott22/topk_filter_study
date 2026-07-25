@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from benchmark_sim.algorithms.base import AllocatorBase
+from benchmark_sim.algorithms.base import AllocatorBase, timed_candidate_filter
+from benchmark_sim.algorithms.memory_optimized import HIPCOptimizationMixin
 from benchmark_sim.core.types import AllocationDecision, Cell
 
 
-class HIPCAllocator(AllocatorBase):
+class HIPCReferenceAllocator(AllocatorBase):
     """
     Hybrid Information and Plan Consensus (HIPC) allocator.
 
@@ -132,6 +133,7 @@ class HIPCAllocator(AllocatorBase):
 
         self._replace_own_bundle_if_changed(robot, new_path)
 
+    @timed_candidate_filter
     def _candidate_cells(self, robot: Any) -> List[Cell]:
         """Return every valid unsearched cell, ordered by probability and distance."""
 
@@ -1134,5 +1136,10 @@ class HIPCAllocator(AllocatorBase):
         return str(rid)
 
 
+class HIPCAllocator(HIPCOptimizationMixin, HIPCReferenceAllocator):
+    """Memory-bounded HIPC with reference-identical decisions and messages."""
+
+
+HIPCOptimizedAllocator = HIPCAllocator
 Allocator = HIPCAllocator
 

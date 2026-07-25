@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import math
+from array import array
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from benchmark_sim.algorithms.base import AllocatorBase
+from benchmark_sim.algorithms.base import AllocatorBase, timed_candidate_filter
 from benchmark_sim.core.types import AllocationDecision
 
 Cell = Tuple[int, int]
@@ -64,6 +65,18 @@ class DMCHBAAllocator(AllocatorBase):
     PSEUDOTASK_COST = 1.0e9
     TIE_EPS = 1.0e-9
     COMMITMENT_HORIZON = 3
+
+    def __init__(self) -> None:
+        # Reusable O(n) Hungarian workspaces. They grow only when a later solve
+        # requires a larger logical matrix.
+        self._workspace_n = 0
+        self._h_u = array("d")
+        self._h_v = array("d")
+        self._h_minv = array("d")
+        self._h_p = array("I")
+        self._h_way = array("I")
+        self._h_used = bytearray()
+        self._h_assignment = array("i")
 
     # ------------------------------------------------------------------
     # Main simulator entry point
@@ -186,45 +199,164 @@ class DMCHBAAllocator(AllocatorBase):
         clones_per_agent = int(math.ceil(num_tasks / float(num_agents)))
         clones_per_agent = max(1, clones_per_agent)
 
-        clone_rows: List[Tuple[str, Cell, int]] = []
-        for rid in agent_ids:
-            pos = team_agents[rid]
-            for clone_index in range(clones_per_agent):
-                clone_rows.append((rid, pos, clone_index))
-
-        matrix_n = len(clone_rows)
+        matrix_n = clones_per_agent * num_agents
         pseudotask_count = matrix_n - num_tasks
-        columns: List[Optional[Cell]] = list(tasks) + [None] * pseudotask_count
+        row_to_col = self._solve_virtual_assignment(
+            robot,
+            agent_ids,
+            team_agents,
+            tasks,
+            clones_per_agent,
+            matrix_n,
+        )
 
-        cost_matrix = self._build_cost_matrix(robot, clone_rows, columns)
-        row_to_col = self._solve_assignment(cost_matrix)
-
-        assigned_by_robot: Dict[str, List[Cell]] = {rid: [] for rid in agent_ids}
+        my_key = self._canonical_rid(getattr(robot, "rid", ""))
+        assigned: List[Cell] = []
         for row_index, col_index in enumerate(row_to_col):
             if col_index is None:
                 continue
-            if col_index < 0 or col_index >= len(columns):
+            if col_index < 0 or col_index >= num_tasks:
                 continue
 
-            cell = columns[col_index]
-            if cell is None:
-                continue
+            rid = agent_ids[row_index // clones_per_agent]
+            if rid == my_key:
+                assigned.append(tasks[col_index])
 
-            rid, _, _ = clone_rows[row_index]
-            assigned_by_robot.setdefault(rid, []).append(cell)
-
-        my_key = self._canonical_rid(getattr(robot, "rid", ""))
-        assigned = assigned_by_robot.get(my_key, [])
-        ordered_path = self._order_assigned_cells(robot, assigned)
         commitment_horizon = self._planning_horizon(robot, self.COMMITMENT_HORIZON)
-        committed_path = ordered_path[:commitment_horizon]
+        committed_path = self._order_assigned_cells(
+            robot, assigned, limit=commitment_horizon)
 
         setattr(robot, "dmchba_path", committed_path)
-        setattr(robot, "dmchba_last_assigned_count", len(ordered_path))
+        setattr(robot, "dmchba_last_assigned_count", len(assigned))
         setattr(robot, "dmchba_last_committed_count", len(committed_path))
         setattr(robot, "dmchba_last_matrix_n", matrix_n)
         setattr(robot, "dmchba_clones_per_agent", clones_per_agent)
         setattr(robot, "dmchba_pseudotask_count", pseudotask_count)
+
+    def _ensure_virtual_workspace(self, matrix_n: int) -> None:
+        if matrix_n <= self._workspace_n:
+            return
+        size = matrix_n + 1
+        self._workspace_n = matrix_n
+        self._h_u = array("d", [0.0]) * size
+        self._h_v = array("d", [0.0]) * size
+        self._h_minv = array("d", [0.0]) * size
+        self._h_p = array("I", [0]) * size
+        self._h_way = array("I", [0]) * size
+        self._h_used = bytearray(size)
+        self._h_assignment = array("i", [-1]) * matrix_n
+
+    def _solve_virtual_assignment(
+        self,
+        robot: Any,
+        agent_ids: Sequence[str],
+        team_agents: Dict[str, Cell],
+        tasks: Sequence[Cell],
+        clones_per_agent: int,
+        matrix_n: int,
+    ) -> Sequence[int]:
+        """Solve the original logical clone matrix without materializing it."""
+
+        if matrix_n == 0:
+            return ()
+        self._ensure_virtual_workspace(matrix_n)
+
+        task_count = len(tasks)
+        grid_size = self._grid_size(robot)
+        base_costs: List[array] = []
+        for rid in agent_ids:
+            agent_pos = team_agents[rid]
+            row = array("d", [0.0]) * task_count
+            for task_index, cell in enumerate(tasks):
+                distance = self.manhattan(
+                    agent_pos[0], agent_pos[1], cell[0], cell[1])
+                row[task_index] = self._probability_adjusted_cost(
+                    robot, distance, cell)
+            base_costs.append(row)
+
+        n = matrix_n
+        u = self._h_u
+        v = self._h_v
+        minv = self._h_minv
+        p = self._h_p
+        way = self._h_way
+        used = self._h_used
+        assignment = self._h_assignment
+        infinity = float("inf")
+
+        for j in range(n + 1):
+            u[j] = 0.0
+            v[j] = 0.0
+            minv[j] = infinity
+            p[j] = 0
+            way[j] = 0
+            used[j] = 0
+            if j < n:
+                assignment[j] = -1
+
+        for i in range(1, n + 1):
+            p[0] = i
+            j0 = 0
+            for j in range(n + 1):
+                minv[j] = infinity
+                used[j] = 0
+
+            while True:
+                used[j0] = 1
+                i0 = p[j0]
+                row_index = i0 - 1
+                agent_index = row_index // clones_per_agent
+                clone_index = row_index % clones_per_agent
+                agent_costs = base_costs[agent_index]
+                delta = infinity
+                j1 = 0
+
+                for j in range(1, n + 1):
+                    if used[j]:
+                        continue
+                    col_index = j - 1
+                    if col_index < task_count:
+                        cell = tasks[col_index]
+                        cell_order = cell[1] * grid_size + cell[0]
+                        cost = agent_costs[col_index]
+                        cost += self.TIE_EPS * (
+                            cell_order
+                            + clone_index * 0.001
+                            + row_index * 0.000001
+                        )
+                    else:
+                        cost = self.PSEUDOTASK_COST + col_index * self.TIE_EPS
+
+                    cur = float(cost) - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+
+                for j in range(n + 1):
+                    if used[j]:
+                        u[p[j]] += delta
+                        v[j] -= delta
+                    else:
+                        minv[j] -= delta
+
+                j0 = j1
+                if p[j0] == 0:
+                    break
+
+            while True:
+                j1 = way[j0]
+                p[j0] = p[j1]
+                j0 = j1
+                if j0 == 0:
+                    break
+
+        for j in range(1, n + 1):
+            if p[j] != 0:
+                assignment[p[j] - 1] = j - 1
+        return assignment[:n]
 
     def _build_cost_matrix(
         self,
@@ -260,7 +392,12 @@ class DMCHBAAllocator(AllocatorBase):
 
         return matrix
 
-    def _order_assigned_cells(self, robot: Any, cells: Sequence[Cell]) -> List[Cell]:
+    def _order_assigned_cells(
+        self,
+        robot: Any,
+        cells: Sequence[Cell],
+        limit: Optional[int] = None,
+    ) -> List[Cell]:
         """
         Greedily order this robot's assigned cells by the shared adjusted cost.
         """
@@ -269,7 +406,7 @@ class DMCHBAAllocator(AllocatorBase):
         ordered: List[Cell] = []
         reference = self._robot_pos(robot)
 
-        while remaining:
+        while remaining and (limit is None or len(ordered) < limit):
             best_cell: Optional[Cell] = None
             best_score = -1.0e18
 
@@ -470,6 +607,7 @@ class DMCHBAAllocator(AllocatorBase):
     # Task set and team state
     # ------------------------------------------------------------------
 
+    @timed_candidate_filter
     def _candidate_cells(self, robot: Any) -> List[Cell]:
         """Return all valid unsearched cells in deterministic grid order."""
 
@@ -753,4 +891,5 @@ class DMCHBAAllocator(AllocatorBase):
 
 # Optional aliases make the file easier to load if the runner expects a generic
 # class name during early integration.
+DMCHBAOptimizedAllocator = DMCHBAAllocator
 Allocator = DMCHBAAllocator

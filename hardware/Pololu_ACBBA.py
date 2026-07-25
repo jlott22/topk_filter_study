@@ -48,16 +48,32 @@ import heapq
 import sys
 import gc
 from array import array
+from allocator_memory import (
+    CellIndexedMap,
+    PackedCandidateWorkspace,
+    require_binary64,
+)
 from machine import UART, Pin
 from pololu_3pi_2040_robot import robot
 from pololu_3pi_2040_robot.extras import editions
 from pololu_3pi_2040_robot.buzzer import Buzzer
 
+require_binary64()
+
 # -----------------------------
 # Robot identity & start pose
 # -----------------------------
 ROBOT_ID = "03"  # set to "00", "01", "02", or "03" at deployment
+ALGORITHM_NAME = "ACBBA"
 GRID_SIZE = 19
+LOGIC_REVISION = "dcta_parity_v1"
+TRIAL_MODE = "clue_search"
+COMMITMENT_HORIZON = 3
+# Fraction of total grid cells retained by the post-clue candidate prefilter.
+TOP_K_PERCENT = 1.0
+if not (0.0 < TOP_K_PERCENT <= 1.0):
+    raise ValueError("TOP_K_PERCENT must be greater than 0 and at most 1")
+TOP_K_MAX_CELLS = max(1, int(GRID_SIZE * GRID_SIZE * TOP_K_PERCENT + 0.5))
 
 DEBUG_LOG_FILE = "debug-log.txt"
 
@@ -67,6 +83,7 @@ METRIC_START_TIME_MS = None  # set after first post-calibration intersection
 start_signal = False  # set when hub command received
 pre_start_signal = False  # set when hub pre-start command received
 trial_active = False       # True only while trial metrics/search are active
+abort_signal = False       # wake a stationary controller after an armed abort
 returning_home = False     # suppress target completion while navigating home
 return_home_blocked = False # bump detected during an unmetered return-home move
 intersection_count = 0          # steps taken by this robot
@@ -81,15 +98,33 @@ NUM_ROBOTS = len(TEAM_IDS)
 
 #expiremental variables
 msg_drop_rate = 0  # simulated message drop rate (0.0 to 1.0)
+CONFIG_RATE_SCALE = 1000000
+applied_config_sequence = 0
+applied_top_k_ppm = CONFIG_RATE_SCALE
+applied_drop_ppm = 0
+applied_scenario_sha256 = ""
+last_config_request = None
+last_config_status = "OK"
+control_state = "BOOT"
 
 _metrics_logged = False
 _metrics_cache = None
+metrics_frozen = False
+metric_freeze_time_ms = None
+terminal_target_step_counted = False
 
 buzzer = None  # replaced after hardware initialization
 
 # Energy/Time metrics
 motor_time_ms = 0              # cumulative ms motors were commanded non-zero
 _motor_start_ms = None         # internal tracker for motor activity
+candidate_filter_calls = 0
+candidate_filter_time_us_total = 0
+candidate_filter_time_us_max = 0
+allocator_solve_time_us_total = 0
+allocator_time_us_total = 0
+allocator_calls = 0
+allocator_time_us_max = 0
 
 def finalize_motor_time(now_ticks=None):
     """Ensure motor_time_ms captures any active span before sampling metrics."""
@@ -133,10 +168,43 @@ def busy_timer_value_ms():
     return _busy_accum_us // 1000
 
 
+def record_candidate_filter_time(start_us):
+    global candidate_filter_calls, candidate_filter_time_us_total, candidate_filter_time_us_max
+    if metrics_frozen:
+        return
+    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
+    candidate_filter_calls += 1
+    candidate_filter_time_us_total += elapsed_us
+    if elapsed_us > candidate_filter_time_us_max:
+        candidate_filter_time_us_max = elapsed_us
+
+
+def record_allocator_solve_time(start_us, filter_time_before_us):
+    global allocator_solve_time_us_total
+    if metrics_frozen:
+        return
+    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
+    filter_us = max(0, candidate_filter_time_us_total - filter_time_before_us)
+    allocator_solve_time_us_total += max(0, elapsed_us - filter_us)
+
+
+def record_allocator_time(start_us):
+    global allocator_calls, allocator_time_us_total, allocator_time_us_max
+    if metrics_frozen:
+        return
+    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
+    allocator_calls += 1
+    allocator_time_us_total += elapsed_us
+    if elapsed_us > allocator_time_us_max:
+        allocator_time_us_max = elapsed_us
+
+
 def update_mem_headroom():
     """Refresh current free heap measurement and track the lowest observed value."""
     global mem_free_min
     current = gc.mem_free()
+    if metrics_frozen:
+        return current
     if current < mem_free_min:
         mem_free_min = current
     return current
@@ -147,9 +215,13 @@ def reset_trial_metrics():
     global intersection_count, task_cell_replan_count, path_replan_count, collision_prevention_count
     global last_task_cell, collision_event_counted_since_move
     global motor_time_ms, _motor_start_ms, busy_ms, mem_free_min
+    global candidate_filter_calls, candidate_filter_time_us_total, candidate_filter_time_us_max
+    global allocator_solve_time_us_total, allocator_time_us_total
+    global allocator_calls, allocator_time_us_max
     global topic_1_rec, topic_2_rec, topic_3_rec, topic_4_rec, topic_5_rec
     global topic_1_sent, topic_2_sent, topic_3_sent, topic_4_sent, topic_5_sent
     global bytes_sent, bytes_received, _metrics_logged, _metrics_cache
+    global metrics_frozen, metric_freeze_time_ms, terminal_target_step_counted
 
     intersection_count = 0
     task_cell_replan_count = 0
@@ -161,6 +233,13 @@ def reset_trial_metrics():
     _motor_start_ms = None
     busy_ms = 0
     mem_free_min = gc.mem_free()
+    candidate_filter_calls = 0
+    candidate_filter_time_us_total = 0
+    candidate_filter_time_us_max = 0
+    allocator_solve_time_us_total = 0
+    allocator_time_us_total = 0
+    allocator_calls = 0
+    allocator_time_us_max = 0
 
     topic_1_rec = 0
     topic_2_rec = 0
@@ -176,6 +255,9 @@ def reset_trial_metrics():
     bytes_received = 0
     _metrics_logged = False
     _metrics_cache = None
+    metrics_frozen = False
+    metric_freeze_time_ms = None
+    terminal_target_step_counted = False
 
 
 #message counters
@@ -222,9 +304,26 @@ def safe_assert(condition, message):
 
 def record_intersection(x, y):
     """Track this robot's completed intersection steps."""
+    if metrics_frozen:
+        return False
     safe_assert(0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE, "intersection out of range")
     global intersection_count
     intersection_count += 1
+    return True
+
+
+def freeze_trial_metrics(now_ticks=None):
+    """Freeze the metered trial at the first target alert."""
+    global metrics_frozen, metric_freeze_time_ms, busy_ms
+    if metrics_frozen:
+        return False
+    if now_ticks is None:
+        now_ticks = time.ticks_ms()
+    finalize_motor_time(now_ticks)
+    busy_ms += busy_timer_value_ms()
+    metric_freeze_time_ms = now_ticks
+    metrics_frozen = True
+    return True
 
 
 def messaging_metrics():
@@ -256,10 +355,21 @@ def metrics_log():
     if _metrics_logged and _metrics_cache is not None:
         return _metrics_cache
     start = METRIC_START_TIME_MS if METRIC_START_TIME_MS is not None else BOOT_TIME_MS
-    now = time.ticks_ms()
-    finalize_motor_time(now)
+    now = metric_freeze_time_ms
+    if now is None:
+        now = time.ticks_ms()
+        finalize_motor_time(now)
     elapsed_ms = time.ticks_diff(now, start)
-    compute_time_ms = max(0, elapsed_ms - motor_time_ms)
+    mean_step_time_ms = elapsed_ms / intersection_count if intersection_count > 0 else 0.0
+    candidate_filter_time_us_mean = (
+        candidate_filter_time_us_total / candidate_filter_calls
+        if candidate_filter_calls > 0 else 0.0
+    )
+    allocator_time_us_mean = allocator_time_us_total / allocator_calls if allocator_calls > 0 else 0.0
+    allocator_time_pct = (
+        allocator_time_us_total * 100.0 / (elapsed_ms * 1000)
+        if elapsed_ms > 0 else 0.0
+    )
     mem_total = gc.mem_alloc() + gc.mem_free()
     mem_used_peak = mem_total - mem_free_min
     cpu_util_pct = (busy_ms * 100) // elapsed_ms if elapsed_ms > 0 else 0
@@ -270,7 +380,15 @@ def metrics_log():
     metrics = {
         "robot_id": ROBOT_ID,
         "target_location": metric_target_location,
-        "alg": 'ACBBA',
+        "alg": ALGORITHM_NAME,
+        "top_k_rate": TOP_K_PERCENT,
+        "top_k_max_cells": TOP_K_MAX_CELLS,
+        "drop_rate": msg_drop_rate,
+        "config_sequence": applied_config_sequence,
+        "trial_mode": TRIAL_MODE,
+        "commitment_horizon": COMMITMENT_HORIZON,
+        "logic_revision": LOGIC_REVISION,
+        "scenario_sha256": applied_scenario_sha256,
         "steps": intersection_count,
         "msgs_sent": messaging['msgs_sent'],
         "msgs_received": messaging['msgs_received'],
@@ -287,11 +405,21 @@ def metrics_log():
         "bytes_sent": bytes_sent,
         "bytes_received": bytes_received,
         "motor_time_ms": motor_time_ms,
-        "compute_time_ms": compute_time_ms,
-        "busy_ms": busy_ms,
+        "trial_time_ms": elapsed_ms,
         "cpu_util_pct": cpu_util_pct,
         "mem_used_peak": mem_used_peak,
         "mem_free_min": mem_free_min,
+        "candidate_filter_calls": candidate_filter_calls,
+        "candidate_filter_time_us_total": candidate_filter_time_us_total,
+        "candidate_filter_time_us_mean": candidate_filter_time_us_mean,
+        "candidate_filter_time_us_max": candidate_filter_time_us_max,
+        "allocator_solve_time_us_total": allocator_solve_time_us_total,
+        "allocator_calls": allocator_calls,
+        "allocator_time_us_total": allocator_time_us_total,
+        "allocator_time_us_mean": allocator_time_us_mean,
+        "allocator_time_us_max": allocator_time_us_max,
+        "allocator_time_pct": allocator_time_pct,
+        "mean_step_time_ms": mean_step_time_ms,
         "task_cell_replans": task_cell_replan_count,
         "path_replans": path_replan_count,
         "collision_prevention_events": collision_prevention_count,
@@ -301,6 +429,14 @@ def metrics_log():
         "robot_id",
         "target_location",
         "alg",
+        "top_k_rate",
+        "top_k_max_cells",
+        "drop_rate",
+        "config_sequence",
+        "trial_mode",
+        "commitment_horizon",
+        "logic_revision",
+        "scenario_sha256",
         "steps",
         "msgs_sent",
         "msgs_received",
@@ -317,11 +453,21 @@ def metrics_log():
         "bytes_sent",
         "bytes_received",
         "motor_time_ms",
-        "compute_time_ms",
-        "busy_ms",
+        "trial_time_ms",
         "cpu_util_pct",
         "mem_used_peak",
         "mem_free_min",
+        "candidate_filter_calls",
+        "candidate_filter_time_us_total",
+        "candidate_filter_time_us_mean",
+        "candidate_filter_time_us_max",
+        "allocator_solve_time_us_total",
+        "allocator_calls",
+        "allocator_time_us_total",
+        "allocator_time_us_mean",
+        "allocator_time_us_max",
+        "allocator_time_pct",
+        "mean_step_time_ms",
         "task_cell_replans",
         "path_replans",
         "collision_prevention_events",
@@ -358,9 +504,9 @@ except OSError:
 # pos = (x, y)    heading = (dx, dy) where (0,1)=N, (1,0)=E, (0,-1)=S, (-1,0)=W
 START_CONFIG = {
     "00": ((0, 0), (1, 0)),                       # west edge, evenly spaced facing east
-    "01": ((0, 5), (1, 0)),
-    "02": ((0, 10), (1, 0)),
-    "03": ((0, 15), (1, 0)),
+    "01": ((0, 6), (1, 0)),
+    "02": ((0, 12), (1, 0)),
+    "03": ((0, 18), (1, 0)),
 }
 DIRS4 = ((0, 1), (1, 0), (0, -1), (-1, 0))
 
@@ -388,7 +534,10 @@ safe_assert(BAND_Y_MIN <= START_POS[1] <= BAND_Y_MAX,
             "start row must lie inside this robot's band")
 
 # UART0 for ESP32 communication (TX=GP28, RX=GP29)
-uart = UART(0, baudrate=115200, tx=28, rx=29)
+uart = UART(
+    0, baudrate=115200, tx=28, rx=29,
+    rxbuf=4096, txbuf=1024, timeout=1000, timeout_char=10,
+)
 
 # -----------------------------
 # Grid / Maps / Shared State
@@ -401,13 +550,22 @@ CELL_SEARCHED   = 2
 grid = bytearray(GRID_SIZE * GRID_SIZE)
 # target_p is the single search-value map. prob_map is kept as an alias-style
 # working array for A* compatibility and is always copied from target_p.
-prob_map = array('f', [1 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
+def _float_array(values):
+    """Require binary64 storage; unsupported ports fail loudly at startup."""
+    return array("d", values)
+
+
+prob_map = _float_array(
+    [1.0 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
 REWARD_FACTOR = 5
 clues = []                            # list of (x, y) clue cells
+forwarded_clues = set()               # each clue is forwarded at most once
 
 # --- Target belief map ---
 # P_target[i]: belief target is at cell i. There is no separate clue-value map.
-target_p = array('f', [1 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
+target_p = _float_array(
+    [1.0 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
+allocation_probability_normalizer = 1.0 / (GRID_SIZE * GRID_SIZE)
 
 # --- Decay exponent (tunable) ---
 # Higher exponent -> stronger / narrower target probability around clues.
@@ -420,7 +578,7 @@ TARGET_DECAY_EXP = 1.0
 # arrays each planning cycle avoids repeated allocations, which are expensive
 # on MicroPython.
 came_from = array('i', [-1] * (GRID_SIZE * GRID_SIZE))
-cost_so_far = array('f', [0.0] * (GRID_SIZE * GRID_SIZE))
+cost_so_far = _float_array([0.0] * (GRID_SIZE * GRID_SIZE))
 frontier = []
 
 
@@ -457,6 +615,77 @@ def recompute_value_map():
         prob_map[i] = target_p[i]
 
 
+def refresh_probability_normalizer():
+    """Refresh M=max(target_p) over the complete belief map."""
+    global allocation_probability_normalizer
+    maximum = 0.0
+    for probability in target_p:
+        value = float(probability)
+        if (
+            value == value
+            and value != float("inf")
+            and value != -float("inf")
+            and value > maximum
+        ):
+            maximum = value
+    allocation_probability_normalizer = (
+        maximum
+        if (
+            maximum == maximum
+            and maximum != float("inf")
+            and maximum != -float("inf")
+            and maximum > 0.0
+        )
+        else 1.0
+    )
+    return allocation_probability_normalizer
+
+
+def normalized_target_probability(cell):
+    normalizer = allocation_probability_normalizer
+    if (
+        normalizer != normalizer
+        or normalizer == float("inf")
+        or normalizer == -float("inf")
+        or normalizer <= 0.0
+    ):
+        normalizer = refresh_probability_normalizer()
+    probability = float(target_p[idx(cell[0], cell[1])]) / normalizer
+    if (
+        probability != probability
+        or probability == float("inf")
+        or probability == -float("inf")
+        or probability < 0.0
+    ):
+        return 0.0
+    if probability > 1.0:
+        return 1.0
+    return probability
+
+
+def mark_cell_searched_miss(x, y):
+    """Apply a delivered/local target miss and rebuild the exact posterior."""
+    if not (0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE):
+        return False
+    cell_index = idx(x, y)
+    if grid[cell_index] == CELL_SEARCHED:
+        return False
+    grid[cell_index] = CELL_SEARCHED
+    update_prob_map()
+    return True
+
+
+def add_clue_if_new(x, y):
+    """Add one clue observation, mark its cell searched, and rebuild belief."""
+    clue = (x, y)
+    if clue in clues:
+        return False
+    clues.append(clue)
+    grid[idx(x, y)] = CELL_SEARCHED
+    update_prob_map()
+    return True
+
+
 pos = [START_POS[0], START_POS[1]]    # current grid position
 heading = (START_HEADING[0], START_HEADING[1])
 
@@ -474,6 +703,10 @@ peer_pos_yield = {}   # peer_id -> (x, y) last reported position for collision c
 current_task_cell = None   # local internal task cell only; never published as a reservation
 last_task_cell = None
 collision_event_counted_since_move = False
+published_intent = None
+blocked_goal_failures = {}
+temporary_invalid_task_until = {}
+pending_collision_reallocation = False
 
 # -----------------------------
 # ACBBA allocator state
@@ -482,34 +715,40 @@ collision_event_counted_since_move = False
 # not a task-cell/current-task reservation; it carries compact ACBBA table-delta
 # entries for asynchronous deconfliction. Collision avoidance remains separate
 # and uses only topic 2 next-step intent messages.
-ACBBA_BUNDLE_SIZE = 3
+ACBBA_BUNDLE_SIZE = COMMITMENT_HORIZON
 ACBBA_REWARD_FACTOR = REWARD_FACTOR
-ACBBA_BID_SCALE = 100000
 ACBBA_NO_WINNER_CODE = "99"
 ACBBA_EMPTY_FIELD = "X"
-ACBBA_NO_BID = -1000000000000
-ACBBA_NO_TIME = -1
-ACBBA_EPS_BID = 0
-ACBBA_EPS_TIME = 0
+ACBBA_NO_BID = -1.0e18
+ACBBA_NO_TIME = -1.0e18
+ACBBA_EPS_BID = 1.0e-9
+ACBBA_EPS_TIME = 1.0e-9
 
-# Default matches the simulator: evaluate every valid unsearched cell. To make
-# hardware ACBBA top-K later, set ACBBA_USE_TOP_K = True and tune
-# ACBBA_MAX_CANDIDATES. The top-K prefilter uses the same distance-reward
-# priority as hardware ACBBA: target_p[cell] * REWARD_FACTOR minus distance
-# from the nearest known team robot.
-ACBBA_USE_TOP_K = False
-ACBBA_MAX_CANDIDATES = None
-
-acbba_winner_by_cell = {}
-acbba_winning_bid_by_cell = {}
-acbba_bid_time_by_cell = {}
+acbba_winner_by_cell = CellIndexedMap(GRID_SIZE)
+acbba_winning_bid_by_cell = CellIndexedMap(GRID_SIZE, numeric=True)
+acbba_bid_time_by_cell = CellIndexedMap(GRID_SIZE, numeric=True)
 acbba_path = []
 acbba_bundle = []
 acbba_bid_counter = 0
 acbba_clue_signature = None
-acbba_pending_deltas = {}
-acbba_last_sent_signatures = {}
+acbba_pending_deltas = CellIndexedMap(GRID_SIZE)
+acbba_last_sent_signatures = CellIndexedMap(GRID_SIZE)
 acbba_pending_snapshot = False
+acbba_candidate_workspace = PackedCandidateWorkspace(
+    GRID_SIZE, TOP_K_MAX_CELLS)
+
+
+def _apply_top_k_capacity(capacity):
+    global acbba_candidate_workspace
+    if (
+        acbba_candidate_workspace is not None
+        and acbba_candidate_workspace.capacity == capacity
+    ):
+        return
+    acbba_candidate_workspace = None
+    gc.collect()
+    acbba_candidate_workspace = PackedCandidateWorkspace(
+        GRID_SIZE, capacity)
 
 
 TURN_COST = 0.3
@@ -537,21 +776,21 @@ class MotionConfig:
 cfg = MotionConfig()
 
 #UART handling globals
-# ---------- ring buffer ----------
-RB_SIZE = 1024
-buf = bytearray(RB_SIZE)
-head = 0
-tail = 0
 DELIM = ord('-')
 
-# ---------- message builder ----------
+# ---------- bounded streaming frame parser ----------
 MSG_BUF_SIZE = 256
 msg_buf = bytearray(MSG_BUF_SIZE)
 msg_len = 0
+rx_discarding_oversize = False
 
-# ---------- outbound buffer ----------
-TX_BUF_SIZE = 64
+# ---------- serialized outbound framing ----------
+TX_BUF_SIZE = 256
 tx_buf = bytearray(TX_BUF_SIZE)
+tx_view = memoryview(tx_buf)
+uart_tx_lock = _thread.allocate_lock()
+UART_WRITE_DEADLINE_MS = 1500
+uart_tx_failed = False
 
 def _msg_buf_ascii(length):
     """Convert buffered UART protocol bytes to ASCII without UTF-8 decoding."""
@@ -652,7 +891,7 @@ def set_speeds(left, right):
     """Wrapper to track motor active time before delegating to hardware."""
     global _motor_start_ms
     if left != 0 or right != 0:
-        if _motor_start_ms is None:
+        if not metrics_frozen and _motor_start_ms is None:
             _motor_start_ms = time.ticks_ms()
     else:
         finalize_motor_time()
@@ -687,14 +926,34 @@ def stop_and_alert_target():
     the current heading direction so external consumers know where it is.
     """
     global target_location, found_target, move_forward_flag, target_bump_stop
+    global terminal_target_step_counted
+    detected_at_ms = time.ticks_ms()
     next_x = pos[0] + heading[0]
     next_y = pos[1] + heading[1]
+    if target_bump_stop:
+        return
     target_location = (next_x, next_y)
     target_bump_stop = True
-    publish_target(next_x, next_y)
-    buzz('target')
+    if (
+        trial_active and not metrics_frozen
+        and 0 <= next_x < GRID_SIZE
+        and 0 <= next_y < GRID_SIZE
+    ):
+        # The physical pose stays at the last confirmed intersection so the
+        # retreat remains correct, while metrics count the simulator's
+        # logical terminal visit exactly once.
+        record_intersection(next_x, next_y)
+        grid[idx(next_x, next_y)] = CELL_SEARCHED
+        terminal_target_step_counted = True
+    found_target = True
     move_forward_flag = False
     motors_off()
+    try:
+        publish_target(next_x, next_y)
+    finally:
+        freeze_trial_metrics(detected_at_ms)
+        motors_off()
+    buzz('target')
     flash_LEDS(BLUE, 1)
 # ===========================================================
 # UART Messaging
@@ -714,70 +973,358 @@ def stop_and_alert_target():
 #   003.7,8,00,123456,4,7,8,7,9,X,X-  robot 00 ACBBA entry
 #   004.5,2-                         robot 00 clue
 # ===========================================================
+def _uart_write_all_locked(frame_len):
+    """Write one frame completely while ``uart_tx_lock`` is held."""
+    global uart_tx_failed
+    offset = 0
+    deadline = time.ticks_add(time.ticks_ms(), UART_WRITE_DEADLINE_MS)
+    try:
+        while offset < frame_len:
+            if time.ticks_diff(time.ticks_ms(), deadline) >= 0:
+                raise OSError(
+                    "UART write timeout ({}/{})".format(offset, frame_len)
+                )
+            written = uart.write(tx_view[offset:frame_len])
+            if written is None or written == 0:
+                time.sleep_ms(1)
+                continue
+            if written < 0 or written > frame_len - offset:
+                raise OSError("UART write returned invalid length")
+            offset += written
+    except Exception:
+        uart_tx_failed = True
+        raise
+    return frame_len
+
+
 def uart_send(topic, payload_len):
-    """Send the prepared message in tx_buf with topic and payload_len."""
+    """Finish and write the prepared shared-buffer frame with the TX lock held."""
     global bytes_sent
+    frame_len = payload_len + 3
+    if len(topic) != 1 or frame_len > TX_BUF_SIZE:
+        raise ValueError("invalid UART frame")
+    for index in range(2, payload_len + 2):
+        if tx_buf[index] == DELIM:
+            raise ValueError("UART payload contains frame delimiter")
     tx_buf[0] = ord(topic)
     tx_buf[1] = ord('.')
-    tx_buf[payload_len + 2] = ord('-')
-    uart.write(tx_buf[:payload_len + 3])
-    bytes_sent += payload_len + 3
+    tx_buf[payload_len + 2] = DELIM
+    _uart_write_all_locked(frame_len)
+    if not metrics_frozen:
+        bytes_sent += frame_len
+    return frame_len
+
+
+def _uart_send_text(topic, payload, count_bytes=True):
+    """Build and write one text frame atomically using the shared TX buffer."""
+    global bytes_sent
+    payload = str(payload)
+    frame_len = len(payload) + 3
+    if len(topic) != 1 or frame_len > TX_BUF_SIZE or "-" in payload:
+        raise ValueError("invalid UART frame")
+    uart_tx_lock.acquire()
+    try:
+        tx_buf[0] = ord(topic)
+        tx_buf[1] = ord('.')
+        for index in range(len(payload)):
+            code = ord(payload[index])
+            if code < 32 or code > 126:
+                raise ValueError("UART payload must be printable ASCII")
+            tx_buf[index + 2] = code
+        tx_buf[frame_len - 1] = DELIM
+        _uart_write_all_locked(frame_len)
+    finally:
+        uart_tx_lock.release()
+    if count_bytes and not metrics_frozen:
+        bytes_sent += frame_len
+    return frame_len
 
 def publish_position():
     """Publish current pose (for UI/diagnostics)."""
     global topic_1_sent
-    if start_signal:
+    uart_tx_lock.acquire()
+    try:
+        i = 2
+        i = _write_int(tx_buf, i, pos[0])
+        tx_buf[i] = ord(','); i += 1
+        i = _write_int(tx_buf, i, pos[1])
+        uart_send('1', i - 2)
+    finally:
+        uart_tx_lock.release()
+    if _trial_traffic_enabled() and not metrics_frozen:
         topic_1_sent += 1
-    i = 2
-    i = _write_int(tx_buf, i, pos[0])
-    tx_buf[i] = ord(','); i += 1
-    i = _write_int(tx_buf, i, pos[1])
-    uart_send('1', i - 2)
 
 def publish_clue(x, y):
-    """Publish a clue at (x,y)."""
+    """Publish/forward a clue at most once in this trial."""
     global topic_4_sent
-    topic_4_sent += 1
-    i = 2
-    i = _write_int(tx_buf, i, x)
-    tx_buf[i] = ord(','); i += 1
-    i = _write_int(tx_buf, i, y)
-    uart_send('4', i - 2)
+    clue = (int(x), int(y))
+    if clue in forwarded_clues:
+        return False
+    uart_tx_lock.acquire()
+    try:
+        i = 2
+        i = _write_int(tx_buf, i, clue[0])
+        tx_buf[i] = ord(','); i += 1
+        i = _write_int(tx_buf, i, clue[1])
+        uart_send('4', i - 2)
+    finally:
+        uart_tx_lock.release()
+    forwarded_clues.add(clue)
+    if not metrics_frozen:
+        topic_4_sent += 1
+    return True
 
 def publish_target(x, y):
     """Publish that we found the target at (x,y)."""
     global topic_5_sent, found_target
-    topic_5_sent += 1
-    i = 2
-    i = _write_int(tx_buf, i, x)
-    tx_buf[i] = ord(','); i += 1
-    i = _write_int(tx_buf, i, y)
-    uart_send('5', i - 2)
+    uart_tx_lock.acquire()
+    try:
+        i = 2
+        i = _write_int(tx_buf, i, x)
+        tx_buf[i] = ord(','); i += 1
+        i = _write_int(tx_buf, i, y)
+        uart_send('5', i - 2)
+    finally:
+        uart_tx_lock.release()
+    if not metrics_frozen:
+        topic_5_sent += 1
     found_target = True
 
-def publish_intent(x, y):
+def publish_intent(x=None, y=None):
     """
     Publish our intended next cell for low-level collision avoidance only.
     This is not an ACBBA claim, task owner, or task-cell reservation.
     """
-    global topic_2_sent
-    topic_2_sent += 1
-    i = 2
-    i = _write_int(tx_buf, i, x)
-    tx_buf[i] = ord(','); i += 1
-    i = _write_int(tx_buf, i, y)
-    uart_send('2', i - 2)
+    global topic_2_sent, published_intent
+    intent = None if x is None or y is None else (int(x), int(y))
+    signature = ((int(pos[0]), int(pos[1])), intent)
+    if published_intent == signature:
+        return False
+    uart_tx_lock.acquire()
+    try:
+        i = 2
+        i = _write_int(tx_buf, i, signature[0][0])
+        tx_buf[i] = ord(','); i += 1
+        i = _write_int(tx_buf, i, signature[0][1])
+        tx_buf[i] = ord(','); i += 1
+        if intent is None:
+            tx_buf[i] = ord('X'); i += 1
+            tx_buf[i] = ord(','); i += 1
+            tx_buf[i] = ord('X'); i += 1
+        else:
+            i = _write_int(tx_buf, i, intent[0])
+            tx_buf[i] = ord(','); i += 1
+            i = _write_int(tx_buf, i, intent[1])
+        uart_send('2', i - 2)
+    finally:
+        uart_tx_lock.release()
+    published_intent = signature
+    if not metrics_frozen:
+        topic_2_sent += 1
+    return True
 
 
 def publish_acbba_payload(payload):
     """Publish one compact ACBBA table-delta payload on topic 3."""
-    global topic_3_sent, bytes_sent
-    if not start_signal:
+    global topic_3_sent
+    if not _trial_traffic_enabled():
         return
-    topic_3_sent += 1
-    msg = "3." + payload + "-"
-    uart.write(msg)
-    bytes_sent += len(msg)
+    _uart_send_text("3", payload)
+    if not metrics_frozen:
+        topic_3_sent += 1
+
+def _send_config_ack(
+        sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
+        horizon, logic_revision, scenario_sha256, status):
+    payload = "CFGACK,{},{},{},{},{},{},{},{},{},{}".format(
+        sequence, ALGORITHM_NAME, top_k_ppm, top_k_cells, drop_ppm,
+        trial_mode, horizon, logic_revision, scenario_sha256, status)
+    _uart_send_text("6", payload, False)
+
+
+def _send_command_ack(sequence, state):
+    payload = "CMDACK,{},{},{}".format(sequence, ROBOT_ID, state)
+    _uart_send_text("6", payload, False)
+
+
+def _trial_traffic_enabled():
+    return start_signal or control_state == "STARTED"
+
+
+def _clear_start_transport_caches():
+    global published_intent
+    peer_pos.clear()
+    peer_pos_yield.clear()
+    peer_intent.clear()
+    published_intent = None
+
+
+def _handle_control_command(payload):
+    """Apply one sequence-tagged PRESTART/START/RUN/ABORT transition."""
+    global control_state, pre_start_signal, start_signal
+    global found_target, move_forward_flag, abort_signal
+    global METRIC_START_TIME_MS, trial_active
+    try:
+        fields = payload.strip().split(",")
+        if len(fields) != 3 or fields[0] != "CMD":
+            return False
+        command = fields[1]
+        sequence = int(fields[2])
+    except (ValueError, IndexError):
+        return False
+    if sequence <= 0 or sequence != applied_config_sequence:
+        return False
+    if command == "PRESTART":
+        if control_state == "CONFIGURED":
+            pre_start_signal = True
+            control_state = "READY"
+        elif control_state != "READY":
+            return False
+        _send_command_ack(sequence, "READY")
+        return True
+    if command == "START":
+        if control_state == "READY":
+            _clear_start_transport_caches()
+            reset_trial_metrics()
+            start_signal = False
+            control_state = "STARTED"
+        elif control_state not in ("STARTED", "RUNNING"):
+            return False
+        _send_command_ack(sequence, "STARTED")
+        return True
+    if command == "RUN":
+        if control_state == "STARTED":
+            if found_target:
+                abort_signal = True
+                control_state = "ABORTED"
+                _send_command_ack(sequence, "ABORTED")
+                return True
+            METRIC_START_TIME_MS = time.ticks_ms()
+            trial_active = True
+            start_signal = True
+            control_state = "RUNNING"
+        elif control_state != "RUNNING":
+            return False
+        _send_command_ack(sequence, "RUNNING")
+        return True
+    if command == "ABORT":
+        if control_state not in (
+            "CONFIGURED", "READY", "STARTED", "RUNNING", "ABORTED"
+        ):
+            return False
+        if control_state != "ABORTED":
+            abort_signal = True
+            pre_start_signal = False
+            start_signal = False
+            move_forward_flag = False
+            if trial_active:
+                found_target = True
+                freeze_trial_metrics()
+            control_state = "ABORTED"
+        _send_command_ack(sequence, "ABORTED")
+        return True
+    return False
+
+
+def _valid_scenario_sha256(value):
+    return (
+        len(value) == 64
+        and value == value.lower()
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
+def _handle_config_command(payload):
+    global TOP_K_PERCENT, TOP_K_MAX_CELLS, msg_drop_rate
+    global applied_config_sequence, applied_top_k_ppm, applied_drop_ppm
+    global applied_scenario_sha256
+    global last_config_request, last_config_status
+    global control_state
+
+    sequence = 0
+    top_k_ppm = 0
+    top_k_cells = 0
+    drop_ppm = 0
+    trial_mode = ""
+    horizon = 0
+    logic_revision = ""
+    scenario_sha256 = ""
+    try:
+        fields = payload.strip().split(",")
+        if len(fields) != 9 or fields[0] != "CFG":
+            raise ValueError
+        sequence = int(fields[1])
+        top_k_ppm = int(fields[2])
+        top_k_cells = int(fields[3])
+        drop_ppm = int(fields[4])
+        trial_mode = fields[5]
+        horizon = int(fields[6])
+        logic_revision = fields[7]
+        scenario_sha256 = fields[8]
+    except (ValueError, IndexError):
+        _send_config_ack(
+            sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
+            horizon, logic_revision, scenario_sha256, "INVALID")
+        return
+
+    request = (
+        sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
+        horizon, logic_revision, scenario_sha256)
+    if request == last_config_request:
+        _send_config_ack(
+            sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
+            horizon, logic_revision, scenario_sha256, last_config_status)
+        return
+    applied_request = (
+        applied_config_sequence, applied_top_k_ppm, TOP_K_MAX_CELLS,
+        applied_drop_ppm, TRIAL_MODE, COMMITMENT_HORIZON,
+        LOGIC_REVISION, applied_scenario_sha256)
+    if request == applied_request:
+        last_config_request = request
+        last_config_status = "OK"
+        _send_config_ack(
+            sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
+            horizon, logic_revision, scenario_sha256, "OK")
+        return
+
+    expected_cells = max(
+        1,
+        (GRID_SIZE * GRID_SIZE * top_k_ppm
+         + CONFIG_RATE_SCALE // 2) // CONFIG_RATE_SCALE,
+    )
+    status = "OK"
+    if (
+        trial_active or start_signal or pre_start_signal or returning_home
+        or sequence <= applied_config_sequence
+        or not (0 < top_k_ppm <= CONFIG_RATE_SCALE)
+        or not (0 <= drop_ppm <= CONFIG_RATE_SCALE)
+        or top_k_cells != expected_cells
+        or trial_mode != TRIAL_MODE
+        or horizon != COMMITMENT_HORIZON
+        or logic_revision != LOGIC_REVISION
+        or not _valid_scenario_sha256(scenario_sha256)
+    ):
+        status = "INVALID"
+    else:
+        try:
+            _apply_top_k_capacity(top_k_cells)
+            TOP_K_PERCENT = top_k_ppm / CONFIG_RATE_SCALE
+            TOP_K_MAX_CELLS = top_k_cells
+            msg_drop_rate = drop_ppm / CONFIG_RATE_SCALE
+            applied_config_sequence = sequence
+            applied_top_k_ppm = top_k_ppm
+            applied_drop_ppm = drop_ppm
+            applied_scenario_sha256 = scenario_sha256
+            control_state = "CONFIGURED"
+        except MemoryError:
+            status = "MEMORY_ERROR"
+
+    last_config_request = request
+    last_config_status = status
+    _send_config_ack(
+        sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
+        horizon, logic_revision, scenario_sha256, status)
+
 
 def handle_msg(line):
     """
@@ -794,7 +1341,9 @@ def handle_msg(line):
     Ignores:
       - other status fields we don't currently need
     """
-    global pre_start_signal, peer_intent, peer_pos, current_task_cell, first_clue_seen, target_location, start_signal, found_target, move_forward_flag
+    global pre_start_signal, peer_intent, peer_pos, peer_pos_yield
+    global current_task_cell, first_clue_seen, target_location
+    global start_signal, found_target, move_forward_flag, published_intent
 
     # Minimal parsing: "<sender>/<topic>:<payload>"
     try:
@@ -806,6 +1355,11 @@ def handle_msg(line):
     except ValueError:
         return
 
+    # The simulator never delivers a robot's own broadcast back to it.
+    # Match that contract even when the UART bridge echoes a frame.
+    if sender == ROBOT_ID:
+        return
+
     if topic == "1": #position
         global topic_1_rec
         try:
@@ -814,131 +1368,149 @@ def handle_msg(line):
             return
         if not (0 <= ox < GRID_SIZE and 0 <= oy < GRID_SIZE):
             return
-        # Track pre-drop positions for last-minute yield checks only.
-        peer_pos_yield[sender] = (ox, oy)
-        if random.random() <= msg_drop_rate and start_signal:
+        # Topic-1 frames are also used as pre-trial home/readiness beacons.
+        # Keep return-home routing current, but command 2 is the boundary at
+        # which a delivered position becomes a canonical search observation.
+        if not _trial_traffic_enabled():
+            if returning_home:
+                peer_pos[sender] = (ox, oy)
+            return
+        if random.random() < msg_drop_rate:
             return  # simulate message drop
-        if start_signal:
+        if not metrics_frozen:
             topic_1_rec += 1
-        prev = peer_pos.get(sender)
-        if prev and prev != (ox, oy):
-            px, py = prev
-            if 0 <= px < GRID_SIZE and 0 <= py < GRID_SIZE:
-                i_prev = idx(px, py)
-                grid[i_prev] = CELL_SEARCHED
-                # Peer searched this cell and did not report a clue/target
-                update_target_on_miss(i_prev)
-                if current_task_cell == (px, py) and not (pos[0] == px and pos[1] == py):
-                    current_task_cell = None
         peer_pos[sender] = (ox, oy)
-        grid[idx(ox, oy)] = CELL_SEARCHED
+        mark_cell_searched_miss(ox, oy)
+        if current_task_cell == (ox, oy) and (pos[0], pos[1]) != (ox, oy):
+            current_task_cell = None
 
     elif topic == "2": #intent
         global topic_2_rec
-        topic_2_rec += 1
+        if not metrics_frozen:
+            topic_2_rec += 1
+        fields = payload.split(",")
+        if len(fields) not in (2, 4):
+            return
+        intent_fields = fields
+        if len(fields) == 4:
+            try:
+                px, py = int(fields[0]), int(fields[1])
+            except ValueError:
+                return
+            if not (0 <= px < GRID_SIZE and 0 <= py < GRID_SIZE):
+                return
+            peer_pos_yield[sender] = (px, py)
+            intent_fields = fields[2:]
+        if intent_fields[0] == "X" and intent_fields[1] == "X":
+            peer_intent.pop(sender, None)
+            return
         try:
-            ix, iy = map(int, payload.split(","))
+            ix, iy = map(int, intent_fields)
         except ValueError:
             return
         if not (0 <= ix < GRID_SIZE and 0 <= iy < GRID_SIZE):
             return
-        prev = peer_intent.get(sender)
-        if prev and prev != (ix, iy):
-            px, py = prev
-            if 0 <= px < GRID_SIZE and 0 <= py < GRID_SIZE:
-                if peer_pos.get(sender) != (px, py):
-                    grid[idx(px, py)] = CELL_SEARCHED
         peer_intent[sender] = (ix, iy)
 
     elif topic == "3": # ACBBA allocation entry, droppable
-        if random.random() <= msg_drop_rate and start_signal:
+        if not _trial_traffic_enabled():
+            return
+        if random.random() < msg_drop_rate:
             return
         global topic_3_rec
-        if start_signal:
+        if not metrics_frozen:
             topic_3_rec += 1
         _acbba_receive_payload(sender, payload)
 
     elif topic == "4":   #clue
-        if random.random() <= msg_drop_rate:
+        if not _trial_traffic_enabled():
+            return
+        if random.random() < msg_drop_rate:
             return  # simulate message drop
         global topic_4_rec
-        topic_4_rec += 1
+        if not metrics_frozen:
+            topic_4_rec += 1
         try:
             x, y = map(int, payload.split(","))
         except ValueError:
             return
         if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
             clue = (x, y)
-            if clue not in clues:
-                clues.append(clue)
+            if add_clue_if_new(x, y):
                 first_clue_seen = True
-                i = idx(clue[0], clue[1])
-                grid[i] = CELL_SEARCHED
-                update_prob_map()
+                publish_clue(x, y)
                 gc.collect()
 
     elif topic == "5": #target
         # Peer found the target: finish this trial without killing the program.
+        if not _trial_traffic_enabled():
+            return
         global topic_5_rec
-        topic_5_rec += 1
+        if not metrics_frozen:
+            topic_5_rec += 1
         try:
             x, y = map(int, payload.split(","))
             target_location = (x, y)
         except ValueError:
             target_location = None
-        if trial_active and not returning_home:
-            # Do not interrupt a cell already in progress. The active-trial
-            # loop will record that arrival, then stop before choosing another.
+        if not returning_home:
+            # Physical motion already in flight may finish for safety, but the
+            # logical trial ends at this alert and later arrivals are unmetered.
             found_target = True
+            move_forward_flag = False
+            if trial_active:
+                freeze_trial_metrics()
 
     elif topic == "7":  # hub command
-        if payload.strip() == "1":
-            pre_start_signal = True
-        elif payload.strip() == "2":
-            start_signal = True
+        if payload.strip().startswith("CFG,"):
+            _handle_config_command(payload)
+        elif payload.strip().startswith("CMD,"):
+            _handle_control_command(payload)
 
-# ---------- ring buffer helpers ----------
-def rb_put_byte(b):
-    """Push one byte into the ring buffer."""
-    global tail, head
-    buf[tail] = b
-    nxt = (tail + 1) % RB_SIZE
-    if nxt == head:                # buffer full, drop oldest
-        head = (head + 1) % RB_SIZE
-    tail = nxt
-
-def rb_pull_into_msg():
-    """Pull bytes into message buffer until '-' is found."""
-    global head, tail, msg_len
-    if head == tail:
-        return None
-    while head != tail:
-        b = buf[head]
-        head = (head + 1) % RB_SIZE
-        if b == DELIM:  # complete frame
-            s = _msg_buf_ascii(msg_len)
-            msg_len = 0
-            return s
+def _rx_feed_bytes(data):
+    """Parse an arbitrary UART chunk without a lossy downstream ring."""
+    global msg_len, rx_discarding_oversize, bytes_received
+    completed = 0
+    for b in data:
+        if b == DELIM:
+            if rx_discarding_oversize:
+                rx_discarding_oversize = False
+                msg_len = 0
+                continue
+            if msg_len:
+                frame = _msg_buf_ascii(msg_len)
+                msg_len = 0
+                if frame:
+                    left = frame.split(".", 1)[0]
+                    if (
+                        _trial_traffic_enabled() and not metrics_frozen
+                        and len(left) >= 3 and left[2] in "12345"
+                    ):
+                        bytes_received += len(frame) + 1
+                    handle_msg(frame)
+                    completed += 1
+            continue
+        if rx_discarding_oversize:
+            continue
         if msg_len < MSG_BUF_SIZE:
             msg_buf[msg_len] = b
             msg_len += 1
-    return None
+        else:
+            msg_len = 0
+            rx_discarding_oversize = True
+    return completed
 
 # ---------- UART service ----------
 def uart_service():
     """Read and parse any complete messages from UART."""
-    global bytes_received
-    data = uart.read()     # returns None or bytes target
-    if not data:
-        return
-    bytes_received += len(data)
-    for b in data:         # iterate over bytes
-        rb_put_byte(b)
     while True:
-        msg = rb_pull_into_msg()
-        if msg is None:
-            break
-        handle_msg(msg)
+        available = uart.any()
+        if not available:
+            return
+        data = uart.read(min(available, 256))
+        if not data:
+            return
+        _rx_feed_bytes(data)
 
 # ===========================================================
 # Sensing & Motion
@@ -1057,7 +1629,6 @@ def calibrate():
         grid[idx(pos[0], pos[1])] = CELL_SEARCHED
         update_target_on_miss(idx(pos[0], pos[1]))  # start cell is a searched/target-miss cell
     update_prob_map()
-    publish_position()
 
     motors_off()
     gc.collect()
@@ -1077,19 +1648,14 @@ def at_intersection_and_white():
 
 
 def check_current_cell_for_clue(stage="start"):
-    """Check the current cell for a clue without moving off of it. Only used on startup. at_intersection_and_white() is used during normal movement.""""""Check the current cell for a clue without moving off of it."""
+    """Check the current cell for a clue without moving off of it."""
     global first_clue_seen
     if not running or found_target:
         return
     if at_intersection_and_white():
-        clue = (pos[0], pos[1])
-        is_new = clue not in clues
-        if is_new:
-            clues.append(clue)
-        first_clue_seen = True
-        publish_clue(pos[0], pos[1])
-        if is_new:
-            update_prob_map()
+        if add_clue_if_new(pos[0], pos[1]):
+            first_clue_seen = True
+            publish_clue(pos[0], pos[1])
             gc.collect()
 
 # ===========================================================
@@ -1209,6 +1775,7 @@ def update_prob_map():
         else:
             renorm(target_p)
 
+    refresh_probability_normalizer()
     recompute_value_map()
 
 
@@ -1217,11 +1784,10 @@ def update_target_on_miss(i):
     We have searched cell i for the target with POD_target = 1 and did not find
     it. Set P_target(i) = 0 and renormalize target_p/prob_map.
     """
-    if target_p[i] <= 0.0:
+    if not (0 <= i < GRID_SIZE * GRID_SIZE):
         return
-    target_p[i] = 0.0
-    renorm(target_p)
-    recompute_value_map()
+    grid[i] = CELL_SEARCHED
+    update_prob_map()
 
 
 def i_should_yield(ix, iy):
@@ -1234,6 +1800,25 @@ def i_should_yield(ix, iy):
         if (px, py) == (ix, iy):
             return True
     return False
+
+
+def _expire_temporary_invalid_tasks():
+    now = time.ticks_ms()
+    for cell, expires_at in list(temporary_invalid_task_until.items()):
+        if time.ticks_diff(now, expires_at) >= 0:
+            temporary_invalid_task_until.pop(cell, None)
+
+
+def _task_temporarily_invalid(cell):
+    blocked = globals().get("temporary_invalid_task_until", {})
+    expires_at = blocked.get(cell)
+    if expires_at is None:
+        return False
+    now = time.ticks_ms()
+    if time.ticks_diff(now, expires_at) >= 0:
+        blocked.pop(cell, None)
+        return False
+    return True
 
 
 def _rid_sort_key(rid):
@@ -1265,25 +1850,21 @@ def _acbba_encode_winner(winner):
 
 
 def _acbba_encode_signed_field(value, empty_value):
-    """Encode ACBBA sentinel values without '-' because '-' frames UART messages."""
+    """Encode binary64 values without '-' because '-' frames UART messages."""
     try:
-        ivalue = int(value)
+        number = float(value)
     except (ValueError, TypeError):
         return ACBBA_EMPTY_FIELD
-    if ivalue == empty_value:
+    if number == float(empty_value):
         return ACBBA_EMPTY_FIELD
-    if ivalue < 0:
-        return "N" + str(-ivalue)
-    return str(ivalue)
+    return "{:.17g}".format(number).replace("-", "N")
 
 
 def _acbba_parse_signed_field(text, empty_value):
     stripped = str(text).strip()
     if stripped == ACBBA_EMPTY_FIELD:
-        return empty_value
-    if stripped.startswith("N") and len(stripped) > 1:
-        return -int(stripped[1:])
-    return int(float(stripped))
+        return float(empty_value)
+    return float(stripped.replace("N", "-"))
 
 
 def _same_robot_id(a, b):
@@ -1299,35 +1880,35 @@ def _robot_id_less(a, b):
 
 
 def _bid_gt(left, right):
-    return int(left) > int(right) + ACBBA_EPS_BID
+    return float(left) > float(right) + ACBBA_EPS_BID
 
 
 def _bid_lt(left, right):
-    return int(left) < int(right) - ACBBA_EPS_BID
+    return float(left) < float(right) - ACBBA_EPS_BID
 
 
 def _bid_eq(left, right):
-    return abs(int(left) - int(right)) <= ACBBA_EPS_BID
+    return abs(float(left) - float(right)) <= ACBBA_EPS_BID
 
 
 def _time_gt(left, right):
-    return int(left) > int(right) + ACBBA_EPS_TIME
+    return float(left) > float(right) + ACBBA_EPS_TIME
 
 
 def _time_lt(left, right):
-    return int(left) < int(right) - ACBBA_EPS_TIME
+    return float(left) < float(right) - ACBBA_EPS_TIME
 
 
 def _time_eq(left, right):
-    return abs(int(left) - int(right)) <= ACBBA_EPS_TIME
+    return abs(float(left) - float(right)) <= ACBBA_EPS_TIME
 
 
 def _time_gte(left, right):
-    return int(left) >= int(right) - ACBBA_EPS_TIME
+    return float(left) >= float(right) - ACBBA_EPS_TIME
 
 
 def _time_lte(left, right):
-    return int(left) <= int(right) + ACBBA_EPS_TIME
+    return float(left) <= float(right) + ACBBA_EPS_TIME
 
 
 def _acbba_clue_signature():
@@ -1340,7 +1921,16 @@ def _acbba_valid_task(cell):
     x, y = cell
     if not (0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE):
         return False
-    return grid[idx(x, y)] == CELL_UNSEARCHED
+    checker = globals().get("_task_temporarily_invalid")
+    temporarily_invalid = (
+        checker(cell)
+        if checker is not None
+        else cell in globals().get("temporary_invalid_task_until", {})
+    )
+    return (
+        grid[idx(x, y)] == CELL_UNSEARCHED
+        and not temporarily_invalid
+    )
 
 
 def _acbba_route_distance(path):
@@ -1355,83 +1945,95 @@ def _acbba_route_distance(path):
 
 
 def _acbba_best_insertion_bid(path, cell):
-    reward_scaled = int(target_p[idx(cell[0], cell[1])] * ACBBA_REWARD_FACTOR * ACBBA_BID_SCALE)
-    current_distance = _acbba_route_distance(path)
+    """Simulator equation: -(marginal distance + 8 * (1 - p/M))."""
+    current_distance = float(_acbba_route_distance(path))
     best_index = 0
     best_bid = ACBBA_NO_BID
+    path_length = len(path)
     for insertion_index in range(len(path) + 1):
-        candidate_path = path[:insertion_index] + [cell] + path[insertion_index:]
-        marginal_distance = _acbba_route_distance(candidate_path) - current_distance
+        candidate_distance = 0
+        reference = (pos[0], pos[1])
+        path_index = 0
+        for output_index in range(path_length + 1):
+            if output_index == insertion_index:
+                next_cell = cell
+            else:
+                next_cell = path[path_index]
+                path_index += 1
+            candidate_distance += manhattan(
+                reference[0], reference[1], next_cell[0], next_cell[1])
+            reference = next_cell
+        marginal_distance = candidate_distance - current_distance
         if marginal_distance < 0:
             marginal_distance = 0
-        bid = reward_scaled - int(marginal_distance * ACBBA_BID_SCALE)
-        if bid > best_bid:
+        bid = -(
+            float(marginal_distance)
+            + 8.0 * (1.0 - normalized_target_probability(cell))
+        )
+        if _bid_gt(bid, best_bid):
             best_index = insertion_index
             best_bid = bid
-        elif bid == best_bid and insertion_index < best_index:
+        elif _bid_eq(bid, best_bid) and insertion_index < best_index:
             best_index = insertion_index
     return best_index, best_bid
 
 
 def _acbba_bid_from_reference(cell, reference):
-    reward_scaled = int(target_p[idx(cell[0], cell[1])] * ACBBA_REWARD_FACTOR * ACBBA_BID_SCALE)
-    distance_scaled = manhattan(reference[0], reference[1], cell[0], cell[1]) * ACBBA_BID_SCALE
-    return reward_scaled - distance_scaled
-
-
-def _acbba_team_positions():
-    team = {ROBOT_ID: (pos[0], pos[1])}
-    for rid, cell in peer_pos.items():
-        if rid != ROBOT_ID and cell is not None:
-            x, y = cell
-            if 0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE:
-                team[rid] = (x, y)
-    return [(rid, team[rid]) for rid in sorted(team.keys(), key=_rid_sort_key)]
-
-
-def _acbba_priority(cell, team_agents):
-    best = -1000000000000
-    for _, ref in team_agents:
-        score = _acbba_bid_from_reference(cell, ref)
-        if score > best:
-            best = score
-    return best
+    distance = manhattan(
+        reference[0], reference[1], cell[0], cell[1])
+    return -(
+        float(distance)
+        + 8.0 * (1.0 - normalized_target_probability(cell))
+    )
 
 
 def _acbba_candidate_cells():
-    """
-    Return valid task cells. By default this is full-grid, matching simulation.
-    To enable top-K later, set ACBBA_USE_TOP_K = True; the same distance-reward
-    prefilter used by hardware ACBBA will select ACBBA_MAX_CANDIDATES cells.
-    """
-    cells = []
-    if not ACBBA_USE_TOP_K:
+    """Return row-major cells unless a probability-first Top-K is required."""
+    started_us = time.ticks_us()
+    workspace = acbba_candidate_workspace
+    valid_count = 0
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            if _acbba_valid_task((x, y)):
+                valid_count += 1
+
+    workspace.count = 0
+    if valid_count <= workspace.capacity:
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                if _acbba_valid_task((x, y)):
+                    workspace.ids[workspace.count] = y * GRID_SIZE + x
+                    workspace.count += 1
+    else:
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
                 cell = (x, y)
-                if _acbba_valid_task(cell):
-                    cells.append(cell)
-        return cells
-
-    team_agents = _acbba_team_positions()
-    ranked = []
-    for y in range(GRID_SIZE):
-        for x in range(GRID_SIZE):
-            cell = (x, y)
-            if not _acbba_valid_task(cell):
-                continue
-            priority = _acbba_priority(cell, team_agents)
-            p_scaled = int(target_p[idx(x, y)] * ACBBA_BID_SCALE)
-            nearest = 9999
-            for _, ref in team_agents:
-                d = manhattan(ref[0], ref[1], x, y)
-                if d < nearest:
-                    nearest = d
-            ranked.append((-priority, -p_scaled, nearest, x, y, cell))
-    ranked.sort()
-    if ACBBA_MAX_CANDIDATES is not None and ACBBA_MAX_CANDIDATES > 0 and len(ranked) > ACBBA_MAX_CANDIDATES:
-        ranked = ranked[:ACBBA_MAX_CANDIDATES]
-    return [item[5] for item in ranked]
+                if not _acbba_valid_task(cell):
+                    continue
+                cell_id = y * GRID_SIZE + x
+                count = workspace.count
+                if count < workspace.capacity:
+                    insertion = count
+                    while insertion > 0 and workspace._precedes(
+                            cell_id, workspace.ids[insertion - 1],
+                            target_p, idx, pos):
+                        workspace.ids[insertion] = workspace.ids[insertion - 1]
+                        insertion -= 1
+                    workspace.ids[insertion] = cell_id
+                    workspace.count += 1
+                elif workspace._precedes(
+                        cell_id, workspace.ids[workspace.capacity - 1],
+                        target_p, idx, pos):
+                    insertion = workspace.capacity - 1
+                    while insertion > 0 and workspace._precedes(
+                            cell_id, workspace.ids[insertion - 1],
+                            target_p, idx, pos):
+                        workspace.ids[insertion] = workspace.ids[insertion - 1]
+                        insertion -= 1
+                    workspace.ids[insertion] = cell_id
+    cells = workspace
+    record_candidate_filter_time(started_us)
+    return cells
 
 
 def _acbba_can_claim(cell, my_bid):
@@ -1463,13 +2065,25 @@ def _acbba_better_insertion_choice(cell, insertion_index, bid, best_cell, best_i
 def _acbba_next_bid_time():
     global acbba_bid_counter
     acbba_bid_counter += 1
-    return acbba_bid_counter
+    return float(acbba_bid_counter)
 
 
 def _acbba_signature(entry):
-    cell, winner, bid, t, bundle_cells = entry
-    bundle_sig = tuple(bundle_cells) if bundle_cells is not None else None
-    return (cell, _acbba_encode_winner(winner), int(bid), int(t), bundle_sig)
+    cell, winner, bid, t, _bundle_cells = entry
+    return cell, _acbba_encode_winner(winner), float(bid), float(t)
+
+
+def _acbba_same_signature(left, right):
+    if not isinstance(left, tuple) or not isinstance(right, tuple):
+        return False
+    if len(left) != 4 or len(right) != 4:
+        return False
+    return (
+        left[0] == right[0]
+        and left[1] == right[1]
+        and _bid_eq(left[2], right[2])
+        and _time_eq(left[3], right[3])
+    )
 
 
 def _acbba_queue_delta(cell, winner, bid, timestamp, include_bundle_metadata=False):
@@ -1480,8 +2094,8 @@ def _acbba_queue_delta(cell, winner, bid, timestamp, include_bundle_metadata=Fal
         normalized_bid = ACBBA_NO_BID
         normalized_time = ACBBA_NO_TIME
     else:
-        normalized_bid = int(bid)
-        normalized_time = int(timestamp)
+        normalized_bid = float(bid)
+        normalized_time = float(timestamp)
 
     bundle_cells = None
     if include_bundle_metadata and _same_robot_id(normalized_winner, ROBOT_ID) and cell in acbba_path:
@@ -1489,7 +2103,8 @@ def _acbba_queue_delta(cell, winner, bid, timestamp, include_bundle_metadata=Fal
 
     entry = (cell, normalized_winner, normalized_bid, normalized_time, bundle_cells)
     sig = _acbba_signature(entry)
-    if acbba_last_sent_signatures.get(cell) == sig:
+    if _acbba_same_signature(
+            acbba_last_sent_signatures.get(cell), sig):
         acbba_pending_deltas.pop(cell, None)
     else:
         acbba_pending_deltas[cell] = entry
@@ -1501,13 +2116,17 @@ def _acbba_set_table_entry(cell, winner, bid, timestamp, queue=False, include_bu
         normalized_bid = ACBBA_NO_BID
         normalized_time = ACBBA_NO_TIME
     else:
-        normalized_bid = int(bid)
-        normalized_time = int(timestamp)
+        normalized_bid = float(bid)
+        normalized_time = float(timestamp)
 
     old_winner = acbba_winner_by_cell.get(cell, None)
     old_bid = acbba_winning_bid_by_cell.get(cell, ACBBA_NO_BID)
     old_time = acbba_bid_time_by_cell.get(cell, ACBBA_NO_TIME)
-    changed = not (_same_robot_id(old_winner, normalized_winner) and int(old_bid) == normalized_bid and int(old_time) == normalized_time)
+    changed = not (
+        _same_robot_id(old_winner, normalized_winner)
+        and _bid_eq(old_bid, normalized_bid)
+        and _time_eq(old_time, normalized_time)
+    )
 
     acbba_winner_by_cell[cell] = normalized_winner
     acbba_winning_bid_by_cell[cell] = normalized_bid
@@ -1573,26 +2192,31 @@ def acbba_flush_messages():
     if not acbba_pending_deltas:
         return
 
-    ordered = []
-    seen = set()
     for cell in acbba_path:
-        if cell in acbba_pending_deltas and cell not in seen:
-            ordered.append(cell)
-            seen.add(cell)
-    for cell in sorted(acbba_pending_deltas.keys(), key=_cell_sort_key):
-        if cell not in seen:
-            ordered.append(cell)
-            seen.add(cell)
-
-    for cell in ordered:
         entry = acbba_pending_deltas.get(cell)
         if entry is None:
             continue
         sig = _acbba_signature(entry)
-        if acbba_last_sent_signatures.get(cell) == sig:
+        if _acbba_same_signature(
+                acbba_last_sent_signatures.get(cell), sig):
             continue
         publish_acbba_payload(_acbba_payload_from_entry(entry))
         acbba_last_sent_signatures[cell] = sig
+
+    for x in range(GRID_SIZE):
+        for y in range(GRID_SIZE):
+            cell = (x, y)
+            if cell in acbba_path:
+                continue
+            entry = acbba_pending_deltas.get(cell)
+            if entry is None:
+                continue
+            sig = _acbba_signature(entry)
+            if _acbba_same_signature(
+                    acbba_last_sent_signatures.get(cell), sig):
+                continue
+            publish_acbba_payload(_acbba_payload_from_entry(entry))
+            acbba_last_sent_signatures[cell] = sig
 
     acbba_pending_deltas.clear()
 
@@ -1644,7 +2268,7 @@ def _acbba_receive_payload(sender, payload):
 
 def _acbba_clear_sender_claims_not_in_bundle(sender, bundle_cells):
     changed = False
-    for cell, winner in list(acbba_winner_by_cell.items()):
+    for cell, winner in acbba_winner_by_cell.items():
         if cell not in bundle_cells and _same_robot_id(winner, sender):
             if _acbba_set_table_entry(cell, None, ACBBA_NO_BID, ACBBA_NO_TIME, queue=True):
                 changed = True
@@ -1652,6 +2276,7 @@ def _acbba_clear_sender_claims_not_in_bundle(sender, bundle_cells):
 
 
 def _acbba_handle_entry(sender, cell, received_winner, received_bid, received_time, bundle_cells):
+    global current_task_cell
     if bundle_cells is not None and _same_robot_id(received_winner, sender):
         if _acbba_clear_sender_claims_not_in_bundle(sender, bundle_cells):
             _acbba_repair_bundle_after_consensus()
@@ -1659,11 +2284,15 @@ def _acbba_handle_entry(sender, cell, received_winner, received_bid, received_ti
     if not _acbba_valid_task(cell):
         if _acbba_set_table_entry(cell, None, ACBBA_NO_BID, ACBBA_NO_TIME, queue=True):
             _acbba_repair_bundle_after_consensus()
+        if current_task_cell is not None and not acbba_path:
+            current_task_cell = None
         return
 
     changed = _acbba_apply_table1_decision(cell, sender, received_winner, received_bid, received_time)
     if changed:
         _acbba_repair_bundle_after_consensus()
+    if current_task_cell is not None and not acbba_path:
+        current_task_cell = None
 
 
 def _action_update_and_rebroadcast(cell, winner, bid, timestamp):
@@ -1830,37 +2459,87 @@ def _acbba_release_own_bundle_for_replan():
 
 
 def _acbba_clear_invalid_or_completed_cells():
-    for cell in list(acbba_winner_by_cell.keys()):
+    for cell in acbba_winner_by_cell.keys():
         if not _acbba_valid_task(cell):
             _acbba_set_table_entry(cell, None, ACBBA_NO_BID, ACBBA_NO_TIME, queue=True)
     _acbba_repair_bundle_after_consensus()
 
 
+def _acbba_handle_allocator_goal_arrival(arrived_cell):
+    """Clear only the wrapper goal; allocator repair runs on the next choose."""
+    global current_task_cell
+    if current_task_cell is None:
+        return False
+    if (arrived_cell[0] != current_task_cell[0]
+            or arrived_cell[1] != current_task_cell[1]):
+        return False
+    current_task_cell = None
+    return True
+
+
+def _acbba_defer_collision_reallocation():
+    """Leave allocator state intact until the next canonical choose boundary."""
+    global current_task_cell, pending_collision_reallocation
+    current_task_cell = None
+    pending_collision_reallocation = True
+
+
+def _retry_original_goal_after_failed_alternate(blocked_retry_cells):
+    """Retry the protected route once when blocking its first step has no path."""
+    if not first_clue_seen or not blocked_retry_cells:
+        return False
+    publish_intent()
+    blocked_retry_cells.clear()
+    return True
+
+
+def _acbba_complete_cell_arrival(cell_i):
+    """Publish/observe an arrival before emitting allocator completion state."""
+    global first_clue_seen
+
+    publish_position()
+    update_target_on_miss(cell_i)
+
+    reached_allocator_goal = False
+    if first_clue_seen:
+        reached_allocator_goal = _acbba_handle_allocator_goal_arrival(pos)
+
+    if not found_target:
+        potential_clue = (pos[0], pos[1])
+        if potential_clue not in clues and at_intersection_and_white():
+            if add_clue_if_new(pos[0], pos[1]):
+                first_clue_seen = True
+                publish_clue(pos[0], pos[1])
+                update_mem_headroom()
+                gc.collect()
+
+    if not found_target:
+        acbba_flush_messages()
+    return reached_allocator_goal
+
+
 def _acbba_reset_state(preserve_deltas=False):
-    global acbba_winner_by_cell, acbba_winning_bid_by_cell, acbba_bid_time_by_cell
     global acbba_path, acbba_bundle, acbba_bid_counter, acbba_pending_snapshot
-    global acbba_pending_deltas, acbba_last_sent_signatures
-    pending = acbba_pending_deltas if preserve_deltas else {}
-    last = acbba_last_sent_signatures if preserve_deltas else {}
-    acbba_winner_by_cell = {}
-    acbba_winning_bid_by_cell = {}
-    acbba_bid_time_by_cell = {}
+    acbba_winner_by_cell.clear()
+    acbba_winning_bid_by_cell.clear()
+    acbba_bid_time_by_cell.clear()
     acbba_path = []
     acbba_bundle = []
     acbba_bid_counter = 0
     acbba_pending_snapshot = False
-    acbba_pending_deltas = pending
-    acbba_last_sent_signatures = last
+    if not preserve_deltas:
+        acbba_pending_deltas.clear()
+        acbba_last_sent_signatures.clear()
 
 
 def _acbba_reset_if_new_clue_information():
     global acbba_clue_signature
     sig = _acbba_clue_signature()
-    if sig != acbba_clue_signature:
-        preserve = acbba_clue_signature is not None and bool(acbba_path)
-        if preserve:
-            _acbba_truncate_bundle_from(0)
-        _acbba_reset_state(preserve_deltas=preserve)
+    if acbba_clue_signature is None:
+        _acbba_reset_state()
+        acbba_clue_signature = sig
+    elif sig != acbba_clue_signature:
+        # Later clues reshape belief but retain the active consensus/bundle.
         acbba_clue_signature = sig
 
 
@@ -1870,18 +2549,20 @@ def _acbba_insert_claim(cell, insertion_index, bid):
     acbba_path.insert(index, cell)
     acbba_bundle.insert(index, cell)
     bid_time = _acbba_next_bid_time()
-    _acbba_set_table_entry(cell, ROBOT_ID, int(bid), bid_time, queue=True, include_bundle_metadata=True)
+    _acbba_set_table_entry(
+        cell, ROBOT_ID, float(bid), bid_time,
+        queue=True, include_bundle_metadata=True)
     acbba_pending_snapshot = True
 
 
-def _acbba_build_bundle():
+def _acbba_build_bundle_impl():
     global acbba_pending_snapshot
     changed = False
+    candidates = _acbba_candidate_cells()
     while len(acbba_path) < ACBBA_BUNDLE_SIZE:
         best_cell = None
         best_index = 0
         best_bid = ACBBA_NO_BID
-        candidates = _acbba_candidate_cells()
         for cell in candidates:
             if cell in acbba_path or cell in acbba_bundle:
                 continue
@@ -1902,7 +2583,16 @@ def _acbba_build_bundle():
         acbba_pending_snapshot = True
 
 
-def pick_task_cell():
+def _acbba_build_bundle():
+    started_us = time.ticks_us()
+    filter_time_before_us = candidate_filter_time_us_total
+    try:
+        _acbba_build_bundle_impl()
+    finally:
+        record_allocator_solve_time(started_us, filter_time_before_us)
+
+
+def _pick_task_cell_impl():
     """
     Select the next ACBBA task cell.
 
@@ -1911,26 +2601,25 @@ def pick_task_cell():
     deconfliction through topic 3 deltas, and return only the first path cell as
     the internal movement task cell. Core task cells/current tasks are never broadcast.
     """
+    global pending_collision_reallocation
     _acbba_reset_if_new_clue_information()
     _acbba_clear_invalid_or_completed_cells()
+    if pending_collision_reallocation:
+        pending_collision_reallocation = False
+        _acbba_release_own_bundle_for_replan()
     _acbba_repair_bundle_after_consensus()
     _acbba_build_bundle()
     if acbba_path:
         return acbba_path[0]
+    return None
 
-    # Fallback if all viable ACBBA claims are blocked by local consensus state.
-    best = None
-    best_bid = ACBBA_NO_BID
-    for y in range(GRID_SIZE):
-        for x in range(GRID_SIZE):
-            cell = (x, y)
-            if not _acbba_valid_task(cell):
-                continue
-            bid = _acbba_bid_from_reference(cell, (pos[0], pos[1]))
-            if bid > best_bid or (bid == best_bid and (best is None or _cell_sort_key(cell) < _cell_sort_key(best))):
-                best = cell
-                best_bid = bid
-    return best
+
+def pick_task_cell():
+    started_us = time.ticks_us()
+    try:
+        return _pick_task_cell_impl()
+    finally:
+        record_allocator_time(started_us)
 
 def next_serpentine_task_cell_in_band():
     """
@@ -1984,11 +2673,19 @@ def a_star(start, task_cell):
       +1 per step
       + TURN_COST per 90-degree heading change
       + cfg.VISITED_STEP_PENALTY if stepping onto a visited cell (grid==2)
-      (peer positions only block the immediate next step from start)
+      (all delivered peer positions are blocked for the complete route)
     The target_p/prob_map reward is applied as a bonus in the node priority.
     Returns a path as a list: [start, ..., task_cell], or [] if failure.
     """
     # Simple energy tracking - no function call counting needed
+    if start == task_cell:
+        return [start]
+
+    blocked = set(peer_pos.values())
+    blocked.discard(start)
+    if task_cell in blocked:
+        return []
+
     frontier.clear()
     for i in range(GRID_SIZE * GRID_SIZE):
         came_from[i] = -1
@@ -1996,11 +2693,12 @@ def a_star(start, task_cell):
 
     start_idx = idx(start[0], start[1])
     task_cell_idx = idx(task_cell[0], task_cell[1])
-    heapq.heappush(frontier, (0, start_idx, heading))
+    tie = 0
+    heapq.heappush(frontier, (0.0, tie, start_idx, heading))
     came_from[start_idx] = start_idx
     cost_so_far[start_idx] = 0.0
     while frontier and running and not found_target:
-        _, current_idx, cur_dir = heapq.heappop(frontier)
+        _, _, current_idx, cur_dir = heapq.heappop(frontier)
         if current_idx == task_cell_idx:
             break
 
@@ -2013,10 +2711,8 @@ def a_star(start, task_cell):
             i = idx(nx, ny)
             if grid[i] == CELL_OBSTACLE:  # obstacle/reserved
                 continue
-            # Only block peer positions for the very next move from start
-            if current_idx == start_idx:
-                if peer_pos and (nx, ny) in peer_pos.values():
-                    continue
+            if (nx, ny) in blocked and (nx, ny) != task_cell:
+                continue
 
             move_cost = 1.0
             turns = quarter_turns(cur_dir, (dx, dy))
@@ -2044,7 +2740,8 @@ def a_star(start, task_cell):
                     + abs(task_cell[0] - nx)
                     + abs(task_cell[1] - ny)
                 )
-                heapq.heappush(frontier, (priority, i, (dx, dy)))
+                tie += 1
+                heapq.heappush(frontier, (priority, tie, i, (dx, dy)))
                 came_from[i] = current_idx
 
     if came_from[task_cell_idx] == -1:
@@ -2068,20 +2765,28 @@ def a_star(start, task_cell):
 def reset_search_state_for_next_trial():
     """Clear trial/world knowledge after returning home."""
     global first_clue_seen, found_target, target_location, current_task_cell
-    global target_bump_stop
+    global target_bump_stop, abort_signal
     global last_task_cell, collision_event_counted_since_move, METRIC_START_TIME_MS
     global peer_intent, peer_pos, peer_pos_yield, heading, acbba_clue_signature
+    global published_intent, blocked_goal_failures
+    global temporary_invalid_task_until, pending_collision_reallocation
 
     for i in range(GRID_SIZE * GRID_SIZE):
         grid[i] = CELL_UNSEARCHED
         target_p[i] = 1.0 / (GRID_SIZE * GRID_SIZE)
         prob_map[i] = target_p[i]
     clues[:] = []
+    forwarded_clues.clear()
     peer_intent = {}
     peer_pos = {}
     peer_pos_yield = {}
+    published_intent = None
+    blocked_goal_failures = {}
+    temporary_invalid_task_until = {}
+    pending_collision_reallocation = False
     first_clue_seen = False
     found_target = False
+    abort_signal = False
     target_bump_stop = False
     target_location = None
     current_task_cell = None
@@ -2089,6 +2794,7 @@ def reset_search_state_for_next_trial():
     collision_event_counted_since_move = False
     METRIC_START_TIME_MS = None
     heading = (START_HEADING[0], START_HEADING[1])
+    refresh_probability_normalizer()
     _acbba_reset_state()
     acbba_clue_signature = None
     gc.collect()
@@ -2208,15 +2914,17 @@ def return_home():
 
 
 def wait_for_trial_start():
-    """Remain responsive at home until the hub sends command 2."""
+    """Remain responsive at home until RUN releases this armed trial."""
     last_pose_publish = time.ticks_ms()
-    while running and not start_signal:
+    while running and not start_signal and not abort_signal:
         uart_service()
         now = time.ticks_ms()
         if time.ticks_diff(now, last_pose_publish) >= 500 and not pre_start_signal:
             publish_position()
             last_pose_publish = now
         time.sleep_ms(10)
+    if abort_signal:
+        return False
     return running and start_signal
 
 
@@ -2228,34 +2936,54 @@ def run_active_trial():
     global first_clue_seen, move_forward_flag, pos, target_bump_stop
     global task_cell_replan_count, path_replan_count, collision_prevention_count
     global current_task_cell, last_task_cell, collision_event_counted_since_move
+    global pending_collision_reallocation
     global busy_ms, mem_free_min
     try:
         while running and not found_target:
             busy_timer_reset()
-            # free any unused memory from previous iteration to avoid
-            # MicroPython allocation failures during long searches
             gc.collect()
             update_mem_headroom()
+            _expire_temporary_invalid_tasks()
 
             blocked_retry_cells = set()
             try:
                 prev_task_cell = current_task_cell
-                previous_task_completed = prev_task_cell is not None and grid[idx(prev_task_cell[0], prev_task_cell[1])] == CELL_SEARCHED
+                previous_task_completed = (
+                    prev_task_cell is not None
+                    and grid[idx(prev_task_cell[0], prev_task_cell[1])] == CELL_SEARCHED
+                )
                 previous_task_invalidated = (
                     (prev_task_cell is not None and not previous_task_completed)
-                    or (prev_task_cell is None and last_task_cell is not None and grid[idx(last_task_cell[0], last_task_cell[1])] != CELL_SEARCHED)
+                    or (
+                        prev_task_cell is None
+                        and last_task_cell is not None
+                        and grid[idx(last_task_cell[0], last_task_cell[1])] != CELL_SEARCHED
+                    )
                 )
-                if not first_clue_seen:
-                    task_cell = next_serpentine_task_cell_in_band()
+
+                # Match the simulator allocator cadence: retain an active,
+                # unsearched goal instead of rerunning allocation each cell.
+                retained_goal = (
+                    prev_task_cell is not None
+                    and grid[idx(prev_task_cell[0], prev_task_cell[1])] == CELL_UNSEARCHED
+                    and not _task_temporarily_invalid(prev_task_cell)
+                )
+                if retained_goal:
+                    task_cell = prev_task_cell
                 else:
-                    task_cell = pick_task_cell()
-                    acbba_flush_messages()
+                    current_task_cell = None
+                    if not first_clue_seen:
+                        task_cell = next_serpentine_task_cell_in_band()
+                    else:
+                        task_cell = pick_task_cell()
+                        acbba_flush_messages()
+
                 if task_cell is None:
                     current_task_cell = None
+                    publish_intent()
                     busy_timer_pause()
                     for _ in range(10):
                         uart_service()
-                        acbba_flush_messages()
                         time.sleep_ms(20)
                     busy_timer_resume()
                     continue
@@ -2268,12 +2996,11 @@ def run_active_trial():
                     # Core task cells/current tasks are internal only. ACBBA table
                     # entries are sent separately as topic-3 deltas.
                     current_task_cell = task_cell
-                    acbba_flush_messages()
 
                 blocked_retry_cells.clear()
-
+                abandoned_goal = False
+                path = []
                 while True:
-                    # Temporarily treat any blocked retry cells as obstacles for planning
                     _block_backup = []
                     for bx, by in blocked_retry_cells:
                         ci = idx(bx, by)
@@ -2286,105 +3013,112 @@ def run_active_trial():
                             grid[ci] = prev_state
 
                     update_mem_headroom()
-                    # Maintain low memory usage between planning iterations
                     gc.collect()
                     if len(path) < 2:
                         if first_clue_seen:
                             path_replan_count += 1
+                        if _retry_original_goal_after_failed_alternate(
+                            blocked_retry_cells
+                        ):
+                            continue
+                        blocked_goal_failures.pop(task_cell, None)
+                        current_task_cell = None
+                        publish_intent()
                         break
 
                     nxt = path[1]
-
-                    # Publish only next-step safety intent. This is not an ACBBA claim.
                     publish_intent(nxt[0], nxt[1])
 
-                    # Give peers a moment to publish their intent and process it
-                    for _ in range(5):
+                    # Publish intent before turning, then use the simulator's
+                    # 100 ms protected-intent synchronization window.
+                    busy_timer_pause()
+                    turn_towards(tuple(pos), nxt)
+                    busy_timer_resume()
+                    if not running or found_target:
+                        break
+                    for _ in range(10):
                         uart_service()
-                        acbba_flush_messages()
                         busy_timer_pause()
                         time.sleep_ms(10)
                         busy_timer_resume()
+                        if not running or found_target:
+                            break
+                    if not running or found_target:
+                        break
 
                     if i_should_yield(nxt[0], nxt[1]):
-                        # Short back-off then release/rebuild ACBBA bundle, matching
-                        # the simulator collision-avoidance behavior.
                         if first_clue_seen:
                             path_replan_count += 1
                             if not collision_event_counted_since_move:
                                 collision_prevention_count += 1
                                 collision_event_counted_since_move = True
-                        if first_clue_seen:
-                            _acbba_release_own_bundle_for_replan()
-                            current_task_cell = None
-                            acbba_flush_messages()
-                        busy_timer_pause()
-                        # Simple energy tracking - no function call counting needed
-                        time.sleep_ms(300)
+
+                        failure_count = blocked_goal_failures.get(task_cell, 0) + 1
+                        blocked_goal_failures[task_cell] = failure_count
+                        # The first conflict blocks only the conflicting next
+                        # cell and replans an alternate route to the same goal.
+                        if first_clue_seen and failure_count >= 2:
+                            publish_intent()
+                            wait_ms = int(random.random() * 5000.0)
+                            temporary_invalid_task_until[task_cell] = time.ticks_add(
+                                time.ticks_ms(), max(wait_ms, 1))
+                            blocked_goal_failures.pop(task_cell, None)
+                            _acbba_defer_collision_reallocation()
+                            abandoned_goal = True
+
+                            busy_timer_pause()
+                            wait_until = time.ticks_add(time.ticks_ms(), wait_ms)
+                            while (
+                                running
+                                and not found_target
+                                and time.ticks_diff(wait_until, time.ticks_ms()) > 0
+                            ):
+                                uart_service()
+                                remaining = time.ticks_diff(
+                                    wait_until, time.ticks_ms())
+                                time.sleep_ms(min(10, max(1, remaining)))
+                            busy_timer_resume()
+                            break
+
                         blocked_retry_cells.add(nxt)
                         continue
                     break
 
+                if not running or found_target:
+                    break
+                if abandoned_goal:
+                    continue
                 if len(path) < 2:
-                    current_task_cell = None
                     busy_timer_pause()
                     for _ in range(10):
                         uart_service()
-                        acbba_flush_messages()
                         time.sleep_ms(20)
                     busy_timer_resume()
                     continue
 
-                # Face the neighbor and try to move one cell
+                # The turn and final collision check already completed above.
                 busy_timer_pause()
-                turn_towards(tuple(pos), nxt)
-                if not running or found_target:
-                    break
-
                 move_forward_flag = True
                 while move_forward_flag:
                     uart_service()
-                    acbba_flush_messages()
                     time.sleep_ms(1)
                 busy_timer_resume()
 
-                # A local target bump interrupts the cell, so the next
-                # intersection was not reached. A peer alert does not interrupt
-                # motion: finish and record the cell already in progress.
                 if found_target and target_bump_stop:
                     break
 
-                # Arrived + update state & publish
                 pos[0], pos[1] = nxt[0], nxt[1]
                 collision_event_counted_since_move = False
+                blocked_goal_failures.clear()
                 record_intersection(pos[0], pos[1])
                 cell_i = idx(pos[0], pos[1])
-                grid[cell_i] = CELL_SEARCHED
-                # Clear completed ACBBA claims so suffix repair/rebuild can run.
-                if first_clue_seen:
-                    _acbba_clear_invalid_or_completed_cells()
-                    acbba_flush_messages()
-                publish_position()
-                update_target_on_miss(cell_i)
+                _acbba_complete_cell_arrival(cell_i)
 
                 if found_target:
                     break
-
-                # Clue detection: centered + white center sensor
-                potential_clue = (pos[0], pos[1])
-                #added check so that robots not rechecking know clue locations
-                if potential_clue not in clues:
-                    detected = at_intersection_and_white()
-                    if detected:
-                        clues.append(potential_clue)
-                        first_clue_seen = True
-                        publish_clue(pos[0], pos[1])
-
-                        update_prob_map()      # rebuild target_p from all clues
-                        update_mem_headroom()
-                        gc.collect()
             finally:
-                busy_ms += busy_timer_value_ms()
+                if not metrics_frozen:
+                    busy_ms += busy_timer_value_ms()
                 update_mem_headroom()
     finally:
         motors_off()
@@ -2393,24 +3127,20 @@ def run_active_trial():
 def search_loop():
     """Calibrate once, then run repeated search/log/return-home trials."""
     global start_signal, pre_start_signal, trial_active, found_target
-    global METRIC_START_TIME_MS
 
     try:
         calibrate()
         while running:
             reset_search_state_for_next_trial()
             if not wait_for_trial_start():
-                break
+                if not running:
+                    break
+                continue
             pre_start_signal = False
 
-            reset_trial_metrics()
             grid[idx(pos[0], pos[1])] = CELL_SEARCHED
             update_target_on_miss(idx(pos[0], pos[1]))
             update_prob_map()
-            METRIC_START_TIME_MS = time.ticks_ms()
-            trial_active = True
-            found_target = False
-            publish_position()
             check_current_cell_for_clue("start_signal")
 
             run_active_trial()

@@ -19,6 +19,7 @@ class BeliefMap:
     searched: Set[Cell] = field(default_factory=set)
     known_clues: List[Cell] = field(default_factory=list)
     target_p: Dict[Cell, float] = field(default_factory=dict)
+    revision: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.recompute()
@@ -28,9 +29,12 @@ class BeliefMap:
             for x in range(self.grid_size):
                 yield (x, y)
 
-    def mark_searched(self, cell: Cell) -> None:
+    def mark_searched(self, cell: Cell) -> bool:
+        if cell in self.searched:
+            return False
         self.searched.add(cell)
         self.recompute()
+        return True
 
     def add_clue(self, cell: Cell) -> bool:
         if cell not in self.known_clues:
@@ -57,6 +61,7 @@ class BeliefMap:
                     s += 1.0 / ((1.0 + d) ** self.target_decay_exp)
                 values[cell] = s
         self.target_p = self._normalized(values)
+        self.revision += 1
 
     @staticmethod
     def _normalized(values: Dict[Cell, float]) -> Dict[Cell, float]:

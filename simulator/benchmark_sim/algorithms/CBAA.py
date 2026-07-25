@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from benchmark_sim.algorithms.base import AllocatorBase
+from benchmark_sim.algorithms.base import AllocatorBase, timed_candidate_filter
+from benchmark_sim.algorithms.memory_optimized import CBAAOptimizationMixin
 from benchmark_sim.core.types import AllocationDecision
 
 Cell = Tuple[int, int]
 
 
-class CBAAAllocator(AllocatorBase):
+class CBAAReferenceAllocator(AllocatorBase):
     """
     Consensus-Based Auction Algorithm (CBAA) allocator for the simulator.
 
@@ -164,6 +165,7 @@ class CBAAAllocator(AllocatorBase):
         self._claim_cell(robot, best_cell, best_bid)
         return best_cell
 
+    @timed_candidate_filter
     def _candidate_cells(self, robot: Any) -> List[Cell]:
         grid_size = self._grid_size(robot)
         cells: List[Cell] = []
@@ -623,8 +625,6 @@ class CBAAAllocator(AllocatorBase):
             return False
         if not self._same_robot_id(local_winner, released_winner):
             return False
-        if released_bid == self.NO_BID:
-            return True
         return float(local_bid) <= float(released_bid) + self.EPS
 
     def _get_current_task(self, robot: Any) -> Optional[Cell]:
@@ -877,4 +877,9 @@ class CBAAAllocator(AllocatorBase):
 
 # Optional aliases make the file easier to load if the runner expects a generic
 # class name or the old copied class name during early integration.
+class CBAAAllocator(CBAAOptimizationMixin, CBAAReferenceAllocator):
+    """Memory-bounded CBAA with reference-identical decisions and messages."""
+
+
+CBAAOptimizedAllocator = CBAAAllocator
 Allocator = CBAAAllocator

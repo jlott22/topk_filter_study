@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from benchmark_sim.algorithms.base import AllocatorBase
+from benchmark_sim.algorithms.base import AllocatorBase, timed_candidate_filter
+from benchmark_sim.algorithms.memory_optimized import ACBBAOptimizationMixin
 from benchmark_sim.core.types import AllocationDecision, Cell
 
 
-class ACBBAAllocator(AllocatorBase):
+class ACBBAReferenceAllocator(AllocatorBase):
     """
     Asynchronous Consensus-Based Bundle Algorithm (ACBBA) allocator.
 
@@ -144,6 +145,7 @@ class ACBBAAllocator(AllocatorBase):
         if changed:
             setattr(robot, "acbba_pending_snapshot", True)
 
+    @timed_candidate_filter
     def _candidate_cells(self, robot: Any) -> List[Cell]:
         grid_size = self._grid_size(robot)
         cells: List[Cell] = []
@@ -1200,4 +1202,9 @@ class ACBBAAllocator(AllocatorBase):
             return 1, text
 
 
+class ACBBAAllocator(ACBBAOptimizationMixin, ACBBAReferenceAllocator):
+    """Memory-bounded ACBBA with reference-identical decisions and messages."""
+
+
+ACBBAOptimizedAllocator = ACBBAAllocator
 Allocator = ACBBAAllocator
