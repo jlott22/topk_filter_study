@@ -797,6 +797,67 @@ class HubControlBarrierTests(unittest.TestCase):
         self.assertGreater(trial.t0, 0.0)
         self.assertFalse(trial.active)
 
+    def test_manual_stop_key_interrupts_active_target_wait(self):
+        hub = self._hub()
+        hub.args.auto = False
+        hub.args.trial_timeout = 5.0
+        trial = metrics_hub.Trial(
+            "run",
+            metrics_hub.Scenario("1", (5, 5), ()),
+            {"00": metrics_hub.RobotState()},
+        )
+        trial.t0 = time.monotonic()
+        trial.active = True
+
+        class FakeKeyReader:
+            active = True
+            restored = False
+
+            def __init__(self, enabled=True):
+                self.enabled = enabled
+
+            def __enter__(self):
+                self.active = self.enabled
+                return self
+
+            def __exit__(self, *_args):
+                self.active = False
+                self.restored = True
+
+            @staticmethod
+            def poll():
+                return "m"
+
+        original_reader = metrics_hub.TerminalKeyReader
+        reader = FakeKeyReader()
+        metrics_hub.TerminalKeyReader = lambda enabled=True: reader
+        try:
+            with self.assertRaisesRegex(
+                metrics_hub.ManualTrialStop, "M key"
+            ):
+                hub.wait_target(trial)
+        finally:
+            metrics_hub.TerminalKeyReader = original_reader
+
+        self.assertTrue(reader.restored)
+        self.assertFalse(trial.active)
+        self.assertIsNotNone(trial.end_time)
+
+    def test_manual_stop_memory_confirmation_sets_crash_status(self):
+        trial = metrics_hub.Trial(
+            "run",
+            metrics_hub.Scenario("1", (5, 5), ()),
+            {"00": metrics_hub.RobotState()},
+        )
+        trial.status = "manual_stop"
+        trial.failure_reason = "operator ended active trial with M key"
+
+        metrics_hub.record_memory_error_result(trial, True)
+
+        self.assertTrue(trial.memory_error)
+        self.assertEqual(trial.status, "memory_error_crash")
+        self.assertIn("confirmed by operator", trial.failure_reason)
+
     def test_run_loop_orders_full_started_quorum_before_run(self):
         source = Path(metrics_hub.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source, filename=metrics_hub.__file__)

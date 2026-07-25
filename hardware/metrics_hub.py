@@ -6,7 +6,8 @@ Compatible robot commands on hub/command:
   "CMD,PRESTART,N", "CMD,START,N", "CMD,RUN,N", and "CMD,ABORT,N" use
   the applied configuration sequence and require per-robot acknowledgments.
 A JSON scenario is also published on hub/trial_task for operator/host tooling.
-Robot allocation payloads on topics 3 and 6 are recorded verbatim.
+Robot allocation payloads on topic 3 are recorded verbatim. Topic 6 is
+reserved for configuration and control acknowledgments.
 """
 
 import argparse
@@ -15,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -61,10 +63,93 @@ RATE_SCALE = 1_000_000
 TRIAL_MODE = "clue_search"
 LOGIC_REVISION = "dcta_parity_v1"
 DEFAULT_COMMITMENT_HORIZON = 3
+MANUAL_STOP_KEY = "m"
 
 
 class ConfigurationError(RuntimeError):
     pass
+
+
+class ManualTrialStop(RuntimeError):
+    pass
+
+
+class TerminalKeyReader:
+    """Poll one terminal key without requiring Enter, restoring terminal state."""
+
+    def __init__(self, enabled=True):
+        self.enabled = bool(enabled)
+        self.active = False
+        self._mode = None
+        self._fd = None
+        self._saved_attributes = None
+        self._msvcrt = None
+        self._select = None
+        self._termios = None
+
+    def __enter__(self):
+        if not self.enabled or not sys.stdin.isatty():
+            return self
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._msvcrt = msvcrt
+                self._mode = "windows"
+            else:
+                import select
+                import termios
+                import tty
+
+                self._fd = sys.stdin.fileno()
+                self._saved_attributes = termios.tcgetattr(self._fd)
+                tty.setcbreak(self._fd)
+                self._select = select
+                self._termios = termios
+                self._mode = "posix"
+            self.active = True
+        except (ImportError, OSError, ValueError):
+            self._restore()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._restore()
+        return False
+
+    def _restore(self):
+        if (
+            self._mode == "posix"
+            and self._termios is not None
+            and self._saved_attributes is not None
+            and self._fd is not None
+        ):
+            try:
+                self._termios.tcsetattr(
+                    self._fd,
+                    self._termios.TCSADRAIN,
+                    self._saved_attributes,
+                )
+            except (OSError, ValueError):
+                pass
+        self.active = False
+        self._mode = None
+
+    def poll(self):
+        if not self.active:
+            return None
+        if self._mode == "windows":
+            if not self._msvcrt.kbhit():
+                return None
+            key = self._msvcrt.getwch()
+            if key in {"\x00", "\xe0"}:
+                if self._msvcrt.kbhit():
+                    self._msvcrt.getwch()
+                return None
+            return key.lower()
+        readable, _, _ = self._select.select([sys.stdin], [], [], 0)
+        if not readable:
+            return None
+        return sys.stdin.read(1).lower()
 
 
 class Scenario:
@@ -133,6 +218,15 @@ def record_initial_robot_visits(
         if position not in trial.visits:
             robot.unique += 1
         trial.visits[position] = trial.visits.get(position, 0) + 1
+
+
+def record_memory_error_result(trial: Trial, memory_error) -> None:
+    """Record the operator result and identify a manually ended memory crash."""
+
+    trial.memory_error = memory_error
+    if trial.status == "manual_stop" and memory_error is True:
+        trial.status = "memory_error_crash"
+        trial.failure_reason += "; memory error confirmed by operator"
 
 
 def rate_to_ppm(value, *, allow_zero: bool) -> int:
@@ -1125,13 +1219,38 @@ class Hub:
 
     def wait_target(self, trial: Trial):
         deadline = time.monotonic() + self.args.trial_timeout
-        with self.condition:
-            while trial.end_time is None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    trial.active = False
-                    raise TimeoutError(f"trial {trial.run_id} timed out")
-                self.condition.wait(min(0.25, remaining))
+        key_reader = TerminalKeyReader(
+            enabled=not getattr(self.args, "auto", False)
+        )
+        with key_reader:
+            if key_reader.active:
+                print(
+                    "[ACTIVE] Press M (no Enter) to stop this trial and "
+                    "record a suspected robot crash.",
+                    flush=True,
+                )
+            elif not getattr(self.args, "auto", False):
+                print(
+                    "[ACTIVE] Single-key input is unavailable; press Ctrl+C "
+                    "to stop this trial.",
+                    flush=True,
+                )
+            with self.condition:
+                while trial.end_time is None:
+                    if key_reader.poll() == MANUAL_STOP_KEY:
+                        trial.active = False
+                        trial.end_time = (
+                            max(0.0, time.monotonic() - trial.t0)
+                            if trial.t0 else 0.0
+                        )
+                        raise ManualTrialStop(
+                            "operator ended active trial with M key"
+                        )
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        trial.active = False
+                        raise TimeoutError(f"trial {trial.run_id} timed out")
+                    self.condition.wait(min(0.1, remaining))
 
     def run(self):
         os.makedirs(self.args.out_dir, exist_ok=True)
@@ -1263,6 +1382,23 @@ class Hub:
                             abort_error
                         )
                         fatal_control_error = abort_error
+                except ManualTrialStop as error:
+                    with self.condition:
+                        trial.active = False
+                        if trial.end_time is None:
+                            trial.end_time = (
+                                max(0.0, time.monotonic() - trial.t0)
+                                if trial.t0 else 0.0
+                            )
+                    trial.status = "manual_stop"
+                    trial.failure_reason = str(error)
+                    print(f"[TRIAL STOP] {error}")
+                    try:
+                        self.transition_robots(trial, "ABORT", "ABORTED")
+                    except ConfigurationError as abort_error:
+                        trial.failure_reason += "; abort: {}".format(
+                            abort_error
+                        )
                 except KeyboardInterrupt:
                     with self.condition:
                         trial.active = False
@@ -1282,13 +1418,14 @@ class Hub:
                     time.sleep(self.args.drain_seconds)
                     if self.args.auto:
                         value = self.args.memory_error_default
-                        trial.memory_error = (
+                        memory_error = (
                             True if value == "yes"
                             else False if value == "no"
                             else None
                         )
                     else:
-                        trial.memory_error = self.prompt_memory_error()
+                        memory_error = self.prompt_memory_error()
+                    record_memory_error_result(trial, memory_error)
                     self.write_trial(trial)
                     self.import_onboard(trial)
                     print(f"[SAVED] run={run_id}")

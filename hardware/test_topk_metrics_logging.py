@@ -205,6 +205,27 @@ class TopKMetricsLoggingTests(unittest.TestCase):
                 )
                 self.assertEqual(row["scenario_sha256"], "c" * 64, filename)
 
+            trial.run_id = "run-2"
+            trial.status = "manual_stop"
+            trial.failure_reason = "operator ended active trial with M key"
+            metrics_hub.record_memory_error_result(trial, True)
+            hub.write_trial(trial)
+
+            for filename in ("CBAA_sys.csv", "CBAA_robots.csv"):
+                with (Path(tmp) / filename).open(newline="") as stream:
+                    rows = list(csv.DictReader(stream))
+                self.assertEqual(rows[-1]["memory_error"], "1", filename)
+                self.assertEqual(
+                    rows[-1]["trial_status"],
+                    "memory_error_crash",
+                    filename,
+                )
+                self.assertIn(
+                    "memory error confirmed by operator",
+                    rows[-1]["failure_reason"],
+                    filename,
+                )
+
     def test_hub_writes_configuration_acknowledgment_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             hub = object.__new__(metrics_hub.Hub)

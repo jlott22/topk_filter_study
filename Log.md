@@ -1260,3 +1260,26 @@ algorithm:
   intermediate K. The smoke trials must exercise the full control barrier,
   start clues, collision/backoff, terminal freeze, repeated trials, and actual
   UART/MQTT delivery of protected intent and target traffic.
+
+### 2026-07-25 — Manual memory-crash trial termination
+
+- Added a nonblocking active-trial `M` key to `hardware/metrics_hub.py`. It
+  does not require Enter. The hub freezes logical metrics at the keypress,
+  exits the target wait, and sends the normal sequenced `ABORT` command so
+  surviving robots stop even when another robot has crashed before sending a
+  target alert.
+- The existing post-trial memory-error prompt now classifies a manually ended
+  trial explicitly:
+  - yes writes `memory_error=1` and `trial_status=memory_error_crash`;
+  - no writes `memory_error=0` and `trial_status=manual_stop`.
+  Both the system and per-robot CSV rows retain the partial metrics and the
+  operator/abort detail in `failure_reason`.
+- The terminal reader supports immediate keys on Windows and POSIX terminals,
+  restores POSIX terminal settings on every exit path, and retains `Ctrl+C` as
+  the fallback for hosts without single-key terminal support. Automated runs
+  do not enable the key reader.
+- Added regressions for immediate key interruption, terminal-reader cleanup,
+  confirmed memory-crash classification, and serialization of the flag,
+  explicit status, and reason to both hub CSV outputs.
+- Verification: the complete hardware suite passes 141 of 141 tests, and the
+  modified Python sources compile successfully.

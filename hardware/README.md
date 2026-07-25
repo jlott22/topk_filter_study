@@ -170,6 +170,16 @@ state, and acknowledged algorithm/Top-K/drop-rate configuration. During an
 active trial, routine state and allocation traffic stays silent; only clue and
 target detections are printed with the reporting robot and cell.
 
+If a robot crashes and cannot send a target alert, press `M` once without
+pressing Enter. The hub freezes logical metrics at that instant, sends the
+normal `ABORT` command to surviving robots, drains in-flight traffic, and asks
+whether a memory error occurred. Answering yes records `memory_error=1` and
+`trial_status=memory_error_crash`; answering no records `memory_error=0` and
+`trial_status=manual_stop`. The partial trial is retained in both system and
+per-robot CSVs instead of leaving the hub waiting for the target timeout.
+`Ctrl+C` remains the fallback when the host terminal does not support
+single-key input.
+
 The trial ends when the hub receives the first target alert on topic `5`. A
 physical bump is counted as the same terminal logical cell-entry step used by
 the simulator, while the robot retains its real pre-bump pose for retreat.
@@ -265,7 +275,8 @@ CSV fields are `candidate_filter_calls`, `candidate_filter_time_us_total`,
 self-describing. The
 hub's system and per-robot CSVs record the acknowledged algorithm and
 configuration, `algorithm_verified`, the manual `memory_error` flag, and the
-trial status. Configuration acknowledgments are retained separately in
+trial status. Confirmed manually stopped memory crashes use the explicit
+`memory_error_crash` status. Configuration acknowledgments are retained separately in
 `<algorithm>_configuration_acks.csv`.
 
 For noninteractive runs, use `--auto --top-k-rate <rate> --drop-rate <rate>`.
