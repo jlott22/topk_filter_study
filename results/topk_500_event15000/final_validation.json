@@ -1,0 +1,608 @@
+{
+  "all_counts": {
+    "computational_performance.csv": 72000,
+    "robot_performance.csv": 72000,
+    "system_performance.csv": 18000,
+    "trial_summary.csv": 18000
+  },
+  "conditions": [
+    {
+      "algorithm": "ACBBA",
+      "condition_id": "acbba_topk_100",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 361,
+      "top_k_rate": 1.0
+    },
+    {
+      "algorithm": "ACBBA",
+      "condition_id": "acbba_topk_75",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 271,
+      "top_k_rate": 0.75
+    },
+    {
+      "algorithm": "ACBBA",
+      "condition_id": "acbba_topk_50",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 181,
+      "top_k_rate": 0.5
+    },
+    {
+      "algorithm": "ACBBA",
+      "condition_id": "acbba_topk_25",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 90,
+      "top_k_rate": 0.25
+    },
+    {
+      "algorithm": "ACBBA",
+      "condition_id": "acbba_topk_10",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 36,
+      "top_k_rate": 0.1
+    },
+    {
+      "algorithm": "ACBBA",
+      "condition_id": "acbba_topk_5",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 18,
+      "top_k_rate": 0.05
+    },
+    {
+      "algorithm": "CBAA",
+      "condition_id": "cbaa_topk_100",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 361,
+      "top_k_rate": 1.0
+    },
+    {
+      "algorithm": "CBAA",
+      "condition_id": "cbaa_topk_75",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 271,
+      "top_k_rate": 0.75
+    },
+    {
+      "algorithm": "CBAA",
+      "condition_id": "cbaa_topk_50",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 181,
+      "top_k_rate": 0.5
+    },
+    {
+      "algorithm": "CBAA",
+      "condition_id": "cbaa_topk_25",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 90,
+      "top_k_rate": 0.25
+    },
+    {
+      "algorithm": "CBAA",
+      "condition_id": "cbaa_topk_10",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 36,
+      "top_k_rate": 0.1
+    },
+    {
+      "algorithm": "CBAA",
+      "condition_id": "cbaa_topk_5",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 18,
+      "top_k_rate": 0.05
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_100",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 361,
+      "top_k_rate": 1.0
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_75",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 271,
+      "top_k_rate": 0.75
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_50",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 1,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 181,
+      "top_k_rate": 0.5
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_25",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 90,
+      "top_k_rate": 0.25
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_10",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 36,
+      "top_k_rate": 0.1
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_5",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 18,
+      "top_k_rate": 0.05
+    },
+    {
+      "algorithm": "DMCHBA",
+      "condition_id": "dmchba_topk_100",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 361,
+      "top_k_rate": 1.0
+    },
+    {
+      "algorithm": "DMCHBA",
+      "condition_id": "dmchba_topk_75",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 271,
+      "top_k_rate": 0.75
+    },
+    {
+      "algorithm": "DMCHBA",
+      "condition_id": "dmchba_topk_50",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 181,
+      "top_k_rate": 0.5
+    },
+    {
+      "algorithm": "DMCHBA",
+      "condition_id": "dmchba_topk_25",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 90,
+      "top_k_rate": 0.25
+    },
+    {
+      "algorithm": "DMCHBA",
+      "condition_id": "dmchba_topk_10",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 36,
+      "top_k_rate": 0.1
+    },
+    {
+      "algorithm": "DMCHBA",
+      "condition_id": "dmchba_topk_5",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 18,
+      "top_k_rate": 0.05
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_100",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 361,
+      "top_k_rate": 1.0
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_75",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 271,
+      "top_k_rate": 0.75
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_50",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 1,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 181,
+      "top_k_rate": 0.5
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_25",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 90,
+      "top_k_rate": 0.25
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_10",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 2,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 36,
+      "top_k_rate": 0.1
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_5",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 1,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 18,
+      "top_k_rate": 0.05
+    },
+    {
+      "algorithm": "PI",
+      "condition_id": "pi_topk_100",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 361,
+      "top_k_rate": 1.0
+    },
+    {
+      "algorithm": "PI",
+      "condition_id": "pi_topk_75",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 271,
+      "top_k_rate": 0.75
+    },
+    {
+      "algorithm": "PI",
+      "condition_id": "pi_topk_50",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 181,
+      "top_k_rate": 0.5
+    },
+    {
+      "algorithm": "PI",
+      "condition_id": "pi_topk_25",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 90,
+      "top_k_rate": 0.25
+    },
+    {
+      "algorithm": "PI",
+      "condition_id": "pi_topk_10",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 36,
+      "top_k_rate": 0.1
+    },
+    {
+      "algorithm": "PI",
+      "condition_id": "pi_topk_5",
+      "counts": {
+        "computational_performance.csv": 2000,
+        "robot_performance.csv": 2000,
+        "system_performance.csv": 500,
+        "trial_summary.csv": 500
+      },
+      "errors": [],
+      "failed_trials_after_retry": 0,
+      "passed_structure_validation": true,
+      "top_k_max_cells": 18,
+      "top_k_rate": 0.05
+    }
+  ],
+  "conditions_total": 36,
+  "conditions_with_remaining_failures": 4,
+  "extended_retry_caps": [
+    50000,
+    100000
+  ],
+  "extended_retry_finished_at": "2026-07-26T10:56:32-0700",
+  "failed_trials_after_retry": 5,
+  "original_campaign_elapsed_s": 33553.31452536583,
+  "original_campaign_finished_at": "2026-07-26T00:34:43-0700",
+  "passed_structure_validation": true,
+  "remaining_failures": [
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_5",
+      "debug_max_events": "100000",
+      "failure_message": "Debug safety cap reached in trial 249. This usually means the allocator is stuck or returning no reachable goals.",
+      "failure_type": "RuntimeError",
+      "top_k_rate": "0.05",
+      "trial_id": "249"
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_50",
+      "debug_max_events": "100000",
+      "failure_message": "Debug safety cap reached in trial 201. This usually means the allocator is stuck or returning no reachable goals.",
+      "failure_type": "RuntimeError",
+      "top_k_rate": "0.5",
+      "trial_id": "201"
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_10",
+      "debug_max_events": "100000",
+      "failure_message": "Debug safety cap reached in trial 81. This usually means the allocator is stuck or returning no reachable goals.",
+      "failure_type": "RuntimeError",
+      "top_k_rate": "0.1",
+      "trial_id": "81"
+    },
+    {
+      "algorithm": "HIPC",
+      "condition_id": "hipc_topk_10",
+      "debug_max_events": "100000",
+      "failure_message": "Debug safety cap reached in trial 435. This usually means the allocator is stuck or returning no reachable goals.",
+      "failure_type": "RuntimeError",
+      "top_k_rate": "0.1",
+      "trial_id": "435"
+    },
+    {
+      "algorithm": "DGA",
+      "condition_id": "dga_topk_50",
+      "debug_max_events": "100000",
+      "failure_message": "Debug safety cap reached in trial 235. This usually means the allocator is stuck or returning no reachable goals.",
+      "failure_type": "RuntimeError",
+      "top_k_rate": "0.5",
+      "trial_id": "235"
+    }
+  ]
+}

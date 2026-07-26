@@ -23,3 +23,7 @@ results/acbba_topk_25/
 results/acbba_topk_50/
 results/acbba_all_candidates/
 ```
+
+The completed 500-scenario Top-K campaign is documented in
+[`FINAL_RESULTS.md`](FINAL_RESULTS.md). Its raw, combined, validation, retry,
+and condition-summary artifacts are under `topk_500_event15000/`.

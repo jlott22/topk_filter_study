@@ -1,0 +1,15 @@
+{
+  "algorithm": "PI",
+  "condition_id": "pi_topk_100",
+  "counts": {
+    "computational_performance.csv": 2000,
+    "robot_performance.csv": 2000,
+    "system_performance.csv": 500,
+    "trial_summary.csv": 500
+  },
+  "errors": [],
+  "failed_trials_after_retry": 0,
+  "passed_structure_validation": true,
+  "top_k_max_cells": 361,
+  "top_k_rate": 1.0
+}

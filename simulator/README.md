@@ -91,6 +91,19 @@ affect simulated mission time.
 Headless trials and unit tests require Python 3.10 or newer and use only the
 standard library. The live viewer additionally requires `pygame`.
 
+The paired 500-trial Top-K campaign has a dedicated resumable launcher:
+
+```powershell
+python -m benchmark_sim.run_topk_campaign
+```
+
+It serially smoke-tests all 36 algorithm/Top-K conditions, uses 75% of the
+available CPU cores by default, pins each single-threaded simulator worker to
+one core, and schedules longest measured shards first. Every 15,000-event
+first-pass shard finishes before failed trials are retried at 20,000 events.
+Use `--smoke-only` to stop after validation and `--skip-smoke` to resume from
+an existing passing smoke report.
+
 Run the reproducible behavior-reference-versus-default-DGA timing and
 allocation benchmark with:
 
