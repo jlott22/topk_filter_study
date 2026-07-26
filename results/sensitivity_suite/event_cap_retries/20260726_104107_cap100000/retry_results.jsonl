@@ -1,0 +1,14 @@
+{"condition_id": "scale_g19_r2_hipc_topk010", "retried_trial_ids": [29], "remaining_failed_trial_ids": [29], "returncode": 0, "elapsed_seconds": 4.100325584411621}
+{"condition_id": "scale_g19_r2_pi_topk010", "retried_trial_ids": [29], "remaining_failed_trial_ids": [29], "returncode": 0, "elapsed_seconds": 4.2852067947387695}
+{"condition_id": "scale_g19_r2_pi_topk050", "retried_trial_ids": [13], "remaining_failed_trial_ids": [13], "returncode": 0, "elapsed_seconds": 4.550570011138916}
+{"condition_id": "scale_g19_r2_hipc_topk100", "retried_trial_ids": [13], "remaining_failed_trial_ids": [13], "returncode": 0, "elapsed_seconds": 5.168575048446655}
+{"condition_id": "scale_g19_r2_hipc_topk075", "retried_trial_ids": [13], "remaining_failed_trial_ids": [13], "returncode": 0, "elapsed_seconds": 5.243295192718506}
+{"condition_id": "scale_g19_r2_acbba_topk010", "retried_trial_ids": [43], "remaining_failed_trial_ids": [43], "returncode": 0, "elapsed_seconds": 5.614588499069214}
+{"condition_id": "scale_g19_r2_cbaa_topk005", "retried_trial_ids": [43], "remaining_failed_trial_ids": [43], "returncode": 0, "elapsed_seconds": 7.106213569641113}
+{"condition_id": "scale_g19_r2_dga_topk005", "retried_trial_ids": [43], "remaining_failed_trial_ids": [43], "returncode": 0, "elapsed_seconds": 10.664132356643677}
+{"condition_id": "scale_g19_r2_pi_topk005", "retried_trial_ids": [26, 37], "remaining_failed_trial_ids": [26, 37], "returncode": 0, "elapsed_seconds": 10.952555656433105}
+{"condition_id": "scale_g19_r2_dga_topk075", "retried_trial_ids": [20], "remaining_failed_trial_ids": [20], "returncode": 0, "elapsed_seconds": 33.38946747779846}
+{"condition_id": "scale_g19_r2_dga_topk100", "retried_trial_ids": [20], "remaining_failed_trial_ids": [20], "returncode": 0, "elapsed_seconds": 33.89545559883118}
+{"condition_id": "comm_g19_r4_bernoulli_drop025_cbaa_topk010", "retried_trial_ids": [27], "remaining_failed_trial_ids": [27], "returncode": 0, "elapsed_seconds": 63.99095869064331}
+{"condition_id": "scale_g19_r2_dga_topk050", "retried_trial_ids": [13, 20], "remaining_failed_trial_ids": [13, 20], "returncode": 0, "elapsed_seconds": 79.9397132396698}
+{"condition_id": "comm_g19_r4_bernoulli_drop025_dga_topk025", "retried_trial_ids": [39], "remaining_failed_trial_ids": [39], "returncode": 4294967295, "elapsed_seconds": 1290.0509722232819}

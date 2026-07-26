@@ -1,5 +1,41 @@
 # Decentralized Allocator Optimization and Equivalence Log
 
+## 2026-07-26 — Final 500-trial Top-K simulation campaign
+
+- Completed 18,000 condition-trials: six allocation algorithms (`ACBBA`,
+  `CBAA`, `DGA`, `DMCHBA`, `HIPC`, and `PI`) at six Top-K levels (100%, 75%,
+  50%, 25%, 10%, and 5%), using the same 500 scenarios in every condition.
+- Used a 19 × 19 grid, four robots, ideal communication, commitment horizon
+  three, and one single-threaded trial process per worker core.
+- Ran structural and arithmetic smoke validation for all 36 conditions before
+  the full campaign. The final output validation passed for all conditions.
+- First-pass trials used a 15,000-event safety cap. Initial failures were
+  retried after the campaign at 20,000 events, then individually at 50,000 and
+  100,000 events.
+- Five trials remained non-terminating and were excluded from descriptive
+  aggregate metrics without imputation:
+
+  | Algorithm | Top-K | Trial IDs | Excluded |
+  |---|---:|---|---:|
+  | HIPC | 5% | 249 | 1/500 |
+  | HIPC | 10% | 81, 435 | 2/500 |
+  | HIPC | 50% | 201 | 1/500 |
+  | DGA | 50% | 235 | 1/500 |
+
+- The five exclusions represent 0.028% of the 18,000 condition-trials.
+  Investigation identified a rare deterministic collision-resolution
+  livelock. After peer-prediction mismatches removed peers from HIPC or DGA
+  local team planning, incompatible plans caused robots to alternate between
+  adjacent cells. Successful sidesteps reset the blocked-goal failure history,
+  preventing the normal backoff threshold from breaking the cycle. Raising the
+  event cap prolonged the same state without gaining coverage.
+- Counterfactual diagnostic runs that retained peers in local planning
+  completed all five scenarios below the original 15,000-event cap. These
+  diagnostics did not modify the campaign data or production source.
+- Final descriptive results and the exclusion statement are consolidated in
+  `results/FINAL_RESULTS.md`. Condition-level means are stored in
+  `results/topk_500_event15000/final_condition_summary.csv`.
+
 ## Top-K filter testing plan
 
 ### Objective
@@ -1283,3 +1319,301 @@ algorithm:
   explicit status, and reason to both hub CSV outputs.
 - Verification: the complete hardware suite passes 141 of 141 tests, and the
   modified Python sources compile successfully.
+
+### 2026-07-25 — Self-contained Pololu allocator deployment
+
+- Supersedes the earlier two-file deployment instructions in this log.
+  `hardware/allocator_memory.py` was removed; each of the six active
+  `Pololu_*.py` programs is now its complete device runtime and requires no
+  companion Python module.
+- The change addresses an observed immediate startup `MemoryError`. Loading
+  the former helper created a second resident MicroPython module namespace
+  before the programs allocated their 19-by-19 grids, binary64 probability
+  maps, consensus tables, and Top-K workspaces.
+- Embedded only what each program uses:
+  - ACBBA, CBAA, HIPC, and PI contain the binary64 probe, fixed cell-indexed
+    map, and packed Top-K candidate workspace;
+  - DGA contains the binary64 probe and packed candidate workspace;
+  - DMCHBA contains only the binary64 probe because its bounded Hungarian
+    workspaces were already local.
+- Every program runs the same strict binary64 round-trip check, deletes that
+  one-shot function, and performs garbage collection before robot identity,
+  grid, map, and allocator initialization. This removes the helper-module
+  namespace without changing binary64 values, table operations, Top-K source
+  order, overflow ranking, or algorithm equations.
+- Desktop tests now extract the embedded primitives directly from the device
+  scripts. Structural guards require no `allocator_memory` import, require
+  identical shared primitive ASTs across applicable programs, reject unused
+  primitive classes, and verify that the startup probe is run and released.
+- Physical verification remains required: flash one self-contained algorithm
+  file per robot and record successful boot plus live `gc.mem_free()` headroom
+  at K=361, K=18, and an intermediate K. A persistent startup `MemoryError`
+  after this change indicates that the algorithm's own global allocations,
+  firmware heap, or fragmentation—not a second Python module—still exceeds
+  the device budget.
+- Desktop verification completed:
+  - all 144 hardware and cross-implementation parity tests passed;
+  - all 143 study-simulator tests passed, including the corrected-reference
+    full-Top-K guard;
+  - MicroPython v1.27 `mpy-cross` compiled all six self-contained programs;
+  - compiled bytecode sizes were 32,844 bytes ACBBA, 28,801 CBAA, 36,871 DGA,
+    26,683 DMCHBA, 29,996 HIPC, and 29,687 PI;
+  - dependency scans found no Pololu or hardware-test import of
+    `allocator_memory`;
+  - Python compilation and `git diff --check` passed.
+
+### 2026-07-25 — Temporary known-bootable hardware programs
+
+- Physical startup still failed after the self-contained merge with
+  `MemoryError: memory allocation failed, allocating 3112 bytes`.
+- Read-only comparison against `dtca_benchmark_hardware` found that the
+  Top-K/parity versions add roughly 9–16 KB of compiled bytecode plus
+  substantial persistent binary64 tables/workspaces. The major increase came
+  from the parity-alignment work, not from the later helper embedding.
+- Moved the six current Top-K/parity programs to
+  `hardware/in_the_works/`. They remain the target of desktop parity tests but
+  are not approved for physical data collection until the memory issue is
+  fixed and K=361 hardware gates pass.
+- Copied the six known-bootable benchmark programs to `hardware/use/` for
+  temporary physical startup, communication, motion, and hub testing.
+- Kept `hardware/metrics_hub.py` unchanged. Each temporary robot program
+  implements the current hub's topic-6 `CFGACK` and sequenced `CMDACK`
+  protocol, applies the configured message-drop rate, supports protected
+  abort/stop behavior, and uses starts `(0,0)`, `(0,6)`, `(0,12)`, and
+  `(0,18)`.
+- The temporary programs retain the benchmark allocator logic and do not
+  implement Top-K filtering. They reject every configuration except
+  `top_k_rate=1.0` / K=361. Their required `dcta_parity_v1` acknowledgment is
+  transport compatibility for the unchanged hub, not evidence of allocator
+  parity. Temporary host output uses a separate output directory/manifest
+  lock, and robot-local files are named `metrics-temp-<ALGORITHM>.txt`.
+  Temporary outputs must not be included in the Top-K study dataset.
+
+### 2026-07-25 — Hub-configurable Top-K for temporary hardware programs
+
+- Kept `hardware/metrics_hub.py` unchanged and extended only the six programs
+  in `hardware/use/`.
+- The temporary robots now accept the hub's six study rates (`1`, `.75`, `.5`,
+  `.25`, `.10`, `.05`) and verify the corresponding rounded K values (361,
+  271, 181, 90, 36, 18) before returning `CFGACK ... OK`.
+- Every temporary allocator now consumes the configured K as its candidate
+  limit. When truncation is needed, candidates are ranked by descending target
+  probability, then local Manhattan distance, then cell coordinate. Algorithms
+  whose benchmark source order is y-major preserve it when no truncation is
+  needed; DGA and HIPC retain their existing probability-ranked ordering.
+- Removed temporary DGA's hidden fixed 48-candidate cap so the configured and
+  acknowledged K cannot differ from the allocator input.
+- These files still use the older benchmark allocator equations and messaging
+  behavior. Their Top-K support enables physical testing at different filter
+  levels but does not make them simulator-parity study implementations.
+- K=361 can create large runtime allocations in temporary DGA and DMCHBA.
+  Physical smoke testing should start at K=18 and increase through an
+  intermediate rate before K=361.
+- Verification completed:
+  - all 151 hardware tests passed, including hub ACK round trips for all six
+    rates and controlled candidate-selection checks for every allocator;
+  - all six temporary programs compiled with MicroPython `mpy-cross`;
+  - `git diff --check` passed and `hardware/metrics_hub.py` remained unchanged.
+
+### 2026-07-25 — Approved Pololu numeric-precision deviation
+
+- The Pololu 3pi+ 2040's installed MicroPython firmware uses its compatible
+  native scalar floating-point precision rather than the simulator's binary64
+  scalar arithmetic. This hardware-versus-simulator precision difference is
+  an accepted study deviation and must be disclosed with physical results.
+- Hardware programs may use the Pololu-compatible numeric implementation and
+  must not be prevented from starting solely by the strict binary64 startup
+  probe. No runtime source change or firmware change was made as part of this
+  decision entry.
+- The large self-contained ACBBA source still exceeds available heap while
+  MicroPython compiles it at startup. Deploying the same program as
+  firmware-compatible precompiled `.mpy` bytecode is the preferred way to
+  avoid that source-compilation peak without intentionally changing the
+  ACBBA algorithm.
+- The `.mpy` must be built for the robot's exact MicroPython bytecode ABI, with
+  optimization disabled, and its behavior and deployment hash must be tested
+  and recorded before physical study trials.
+
+### 2026-07-25 — Robot 01 precompiled in-the-works deployment
+
+- Updated all six programs in `hardware/in_the_works/` to use
+  `ROBOT_ID = "01"` and to warn, rather than terminate, when the Pololu uses
+  native scalar float precision. No allocator equation or task-selection
+  behavior was changed.
+- Compiled ACBBA, CBAA, DGA, DMCHBA, HIPC, and PI with `mpy-cross` in
+  MicroPython 1.24 compatibility mode at optimization level zero. The six
+  device `.mpy` files were verified byte-for-byte against their local builds.
+- Removed same-name device `.py` files so they cannot shadow the compiled
+  modules and recreate the source-compilation `MemoryError`. Added six
+  `Run_*.py` menu launchers that only import their corresponding compiled
+  modules.
+- Changed the device's `main.py` default program to `None`; power-up now opens
+  the Pololu selection menu instead of immediately calibrating and moving.
+- Motor-free threaded startup reached `wait_for_trial_start` for ACBBA, CBAA,
+  DGA, and DMCHBA. Complete compiled global initialization also passed for
+  HIPC and PI, reporting approximately 119 KB and 120 KB free heap
+  respectively. Repeated host-driven full-thread resets of HIPC destabilized
+  the Windows USB serial connection, so a normal single-launch hardware check
+  remains advisable before trial use.
+- No task-allocation or physical trial cycle was performed. All temporary
+  startup-probe modules were removed from the robot after verification.
+
+### 2026-07-25 — Robot 01 motor-free Top-K allocation estimate
+
+- Ran one local post-clue allocation on the physical Pololu using a clue at
+  `(9, 9)`, no peer messages, no movement thread, and native Pololu float
+  precision. These are ballpark single-robot limits rather than complete
+  multi-robot trial validation.
+- ACBBA passed K=361 in approximately 5.25 seconds.
+- CBAA passed K=361 in approximately 0.89 seconds.
+- PI passed K=361 in approximately 4.08 seconds.
+- HIPC passed K=361 in approximately 20.00 seconds. It did not fail in the
+  study range, but its full-grid allocation is a substantial communication
+  pause.
+- DMCHBA passed K=36 in approximately 3.53 seconds. K=90, K=181, and K=361
+  were still inside the Hungarian solver after 30 seconds and were
+  interrupted. No `MemoryError` was observed, so its practical boundary is
+  between K=36 and K=90 under a 30-second allocation budget.
+- DGA failed at both K=18 and K=361 before completing allocation because this
+  MicroPython firmware does not implement `int.bit_length()`, which the
+  embedded CPython-compatible random generator calls. This is independent of
+  Top-K and means the current DGA deployment cannot complete an allocation at
+  any study K until that compatibility issue is fixed.
+- Temporary Top-K probe modules were removed after testing, and the production
+  `.mpy` deployments were not modified.
+
+### 2026-07-25 19:11 PDT - DGA MicroPython RNG compatibility fix and physical gate
+
+- Replaced the unavailable `int.bit_length()` call only in
+  `hardware/in_the_works/Pololu_DGA.py` with a positive-integer right-shift
+  loop. The loop computes the same bit count before the existing
+  `getrandbits()` rejection sampler, so it consumes no additional random draws
+  and does not change the simulator, seed, population size, 25 generations,
+  crossover, mutation, elitism, or any other GA operator.
+- A bound-focused desktop check matched `random.Random.randrange()` for bounds
+  `1, 2, 3, 4, 7, 8, 9, 255, 256, 257, 361`, using six seeds including robot
+  01's seed `1010` and the large seed `(1 << 70) + 123`. All 2,640 draws and
+  the final RNG states were identical. Existing random, shuffle, sample, RNG
+  isolation, mutation, population, and complete 25-generation parity checks
+  passed; the full `hardware.test_dga_simulator_equivalence` module passed all
+  9 tests in an isolated copy of the committed test suite.
+- Compiled only DGA with MicroPython 1.24 compatibility and optimization level
+  zero using `mpy-cross -c 1.24 -O0`. Robot 01's deployed
+  `Pololu_DGA.mpy` is 36,977 bytes and matched the local build at SHA-256
+  `496C2BF69D0088BC7E40DACA4169C9B082609F7740204E6F694CB3E67107E2C3`.
+- A motor-free, single-robot post-clue allocation at K=18 completed all 25
+  generations in 63.295 seconds, selected task `(7, 8)`, and raised no
+  compatibility or memory exception. Free heap was 116,464 bytes before the
+  allocation and 60,624 bytes immediately afterward.
+- The same motor-free allocation at K=361 exceeded the 180-second watchdog
+  while still preparing the initial population (`dga_generation == 0`).
+  It raised no compatibility or memory exception. Free heap was 114,992 bytes
+  before allocation and 115,280 bytes after interruption and garbage
+  collection.
+- The original startup incompatibility is fixed, but K=361 does not satisfy
+  the full-study acceptance gate. DGA remains blocked from full-grid physical
+  trials pending a separate decision about a performance optimization that
+  may affect parity. No GA parameter reduction was made.
+- Removed every temporary probe, build directory, and isolated test worktree.
+  The robot was soft-rebooted to `main.py` with `default_program = None`, and
+  the motors were left off.
+
+### 2026-07-26 - Immediate target stop and between-trial home rollback
+
+- Updated all six programs in `hardware/in_the_works/` so a bump-triggered
+  target detection turns both motors off before target publication, metrics
+  work, alerts, or other target processing. A received peer target alert now
+  also stops in-progress physical motion immediately.
+- After returning to `START_POS`, each robot first restores its configured
+  east-facing heading and then reverses both wheels at the existing base speed
+  of 650 for 0.3 seconds before stopping. This reuses the programs' existing
+  approximate one-inch motor timing.
+- These are hardware motion-control changes only. They do not change candidate
+  filtering, allocation equations, task selection, random streams, or the
+  simulator algorithms.
+- Compiled robot-00 deployments with `mpy-cross -c 1.24 -O0` and verified all
+  six uploaded `.mpy` files byte-for-byte on `POLOLU 00`. Per request, no
+  algorithm or physical-motion trial was run after deployment.
+
+### 2026-07-26 - Robot 02 filesystem repair and updated deployment
+
+- Robot 02 reproduced robot 00's menu failure: the Windows-mounted files
+  appeared normal, but MicroPython's `os.listdir()` raised `UnicodeError`.
+  Reflashing MicroPython 1.24 did not replace the separate user filesystem, so
+  the verified 15 MB Pololu FAT volume was reformatted and labeled
+  `POLOLU 02`.
+- Restored the factory files, safe selection-menu `main.py`, and six launchers.
+  Removed all old algorithms and logs through the format, then deployed fresh
+  ID-02 `.mpy` builds containing the immediate target stop and east-facing
+  between-trial rollback behavior.
+- All 70 restored configuration, factory, and production files matched their
+  source hashes. After a robot-side remount, both string and byte directory
+  listings returned 36 valid entries with no non-UTF-8 names.
+- No allocation or physical-motion trial was run during this repair.
+
+### 2026-07-26 - Automatic return-home temporarily disabled
+
+- In all six current simulator-parity Pololu sources, commented out the only
+  active calls to target-retreat recovery and `return_home()`. The underlying
+  functions remain intact for later repair, but they are unreachable from the
+  repeated trial loop.
+- After a trial, the robot now stops, records its metrics, remains at its final
+  physical pose, resets its logical pose to `START_POS` facing east, and waits
+  for the next `RUN` command. The operator must physically return each robot to
+  its configured starting position facing east before that command.
+- Target stopping and the normal search movement functions were left enabled.
+  No line following, turning, collision handling, calibration, or allocation
+  behavior was changed.
+- All six files passed desktop syntax and control-flow checks and compiled with
+  `mpy-cross -c 1.24 -O0`. No files were uploaded to a robot for this change.
+
+### 2026-07-26 - Manual five-scenario metrics hub
+
+- Revised `hardware/metrics_hub.py` to load only source episodes `4`, `53`,
+  `232`, `394`, and `473` from
+  `simulator/scenarios/final_trial_500.csv`. They are exposed to the operator
+  as study trial IDs `1` through `5`, respectively.
+- Removed unattended operation and automatic scenario scheduling. The hub now
+  requires a valid manual scenario selection, physical-placement
+  confirmation, Top-K and drop-rate confirmation, and memory-error reporting
+  for every trial. `--trials N` remains available for manually operated
+  multi-trial Top-K sweeps; repeated study IDs and Enter-to-reuse are
+  supported.
+- Removed the `--auto`, `--memory-error-default`, and `--start-index`
+  arguments. `--trials` now defaults to one and rejects non-positive values.
+- Added `source_trial_id` alongside the renumbered `trial_id` in published
+  task JSON, system and robot metrics, event logs, command logs,
+  configuration/control acknowledgment logs, and imported onboard metrics.
+- Added expected-clue, unexpected-clue, and location-warning audit fields.
+  Unexpected clue reports and target-location mismatches produce operator
+  warnings but do not change an otherwise completed trial to a failure.
+  Discovering every expected clue is not required.
+- Added and locked
+  `results/hardware_handpicked_5_scenario_manifest.json`. The manifest records
+  both ordered ID lists and uses cohort SHA-256
+  `92ebcdc84dc259fc27fc6123bef9ca9f0488a874e84e405344e349aa2d07d393`.
+  Robots continue to receive the unchanged CFG/CFGACK protocol and acknowledge
+  this cohort hash.
+- Updated `hardware/README.md` with the five-ID mapping and the manual,
+  repeated-ID Top-K workflow. No Pololu program or simulator architecture was
+  changed for this revision.
+- Added `tests/test_metrics_hub_manual_scenarios.py` outside `hardware/`.
+  All 10 focused tests passed, covering remapping and provenance, the fixed
+  hash and manifest, manual selection/reuse, rejected unattended arguments,
+  repeated multi-trial operation, task and CSV ID propagation, mismatch
+  warnings, row counts, PRESTART/START/RUN boundaries, and metric replay.
+  `hardware/metrics_hub.py` and the test module also passed Python bytecode
+  compilation.
+
+### Next robot connection - Validate metric timing accuracy
+
+- On the next robot connection, physically validate the Pololu metric output
+  against an independent host monotonic clock or stopwatch.
+- Check at minimum `trial_time_ms`, `motor_time_ms`, `compute_time_ms`,
+  allocator timing, and the exact start/freeze boundaries for `RUN`, local
+  target bump, peer target alert, and `ABORT`.
+- Include a case where a peer target message arrives during an allocation.
+  Confirm and document whether that robot's `trial_time_ms` includes the
+  remaining allocation time before it processes the buffered target alert.
+- Do not treat the robot-local timing fields as physically validated until
+  these checks pass on connected hardware.

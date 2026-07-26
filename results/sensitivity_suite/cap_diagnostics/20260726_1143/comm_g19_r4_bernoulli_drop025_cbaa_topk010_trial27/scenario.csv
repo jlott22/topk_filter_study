@@ -1,0 +1,2 @@
+trial_id,episode,object_x,object_y,target_x,target_y,clue1_x,clue1_y,clue2_x,clue2_y,clue3_x,clue3_y,clue4_x,clue4_y
+27,27,6,3,6,3,3,2,10,12,8,16,7,8

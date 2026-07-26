@@ -1,0 +1,45 @@
+{
+  "model": "rayleigh_style",
+  "sensitivity_dbm": -50.63,
+  "seed": 20261717,
+  "samples_per_distance": 20000,
+  "attempts": 100000,
+  "drop_fraction": 0.2507,
+  "representative_links": [
+    {
+      "receiver": [
+        1,
+        0
+      ],
+      "drop_fraction": 5e-05
+    },
+    {
+      "receiver": [
+        5,
+        0
+      ],
+      "drop_fraction": 0.01075
+    },
+    {
+      "receiver": [
+        10,
+        0
+      ],
+      "drop_fraction": 0.0833
+    },
+    {
+      "receiver": [
+        18,
+        0
+      ],
+      "drop_fraction": 0.39655
+    },
+    {
+      "receiver": [
+        18,
+        18
+      ],
+      "drop_fraction": 0.76285
+    }
+  ]
+}

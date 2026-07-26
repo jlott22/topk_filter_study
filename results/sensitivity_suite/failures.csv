@@ -1,0 +1,17 @@
+condition_id,trial_id,failure_type,failure_message
+scale_g19_r2_cbaa_topk005,43,RuntimeError,Debug safety cap reached in trial 43. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_acbba_topk010,43,RuntimeError,Debug safety cap reached in trial 43. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_pi_topk050,13,RuntimeError,Debug safety cap reached in trial 13. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_pi_topk010,29,RuntimeError,Debug safety cap reached in trial 29. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_pi_topk005,26,RuntimeError,Debug safety cap reached in trial 26. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_pi_topk005,37,RuntimeError,Debug safety cap reached in trial 37. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_hipc_topk100,13,RuntimeError,Debug safety cap reached in trial 13. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_hipc_topk075,13,RuntimeError,Debug safety cap reached in trial 13. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_hipc_topk010,29,RuntimeError,Debug safety cap reached in trial 29. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_dga_topk100,20,RuntimeError,Debug safety cap reached in trial 20. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_dga_topk075,20,RuntimeError,Debug safety cap reached in trial 20. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_dga_topk050,13,RuntimeError,Debug safety cap reached in trial 13. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_dga_topk050,20,RuntimeError,Debug safety cap reached in trial 20. This usually means the allocator is stuck or returning no reachable goals.
+scale_g19_r2_dga_topk005,43,RuntimeError,Debug safety cap reached in trial 43. This usually means the allocator is stuck or returning no reachable goals.
+comm_g19_r4_bernoulli_drop025_cbaa_topk010,27,RuntimeError,Debug safety cap reached in trial 27. This usually means the allocator is stuck or returning no reachable goals.
+comm_g19_r4_bernoulli_drop025_dga_topk025,39,RuntimeError,Debug safety cap reached in trial 39. This usually means the allocator is stuck or returning no reachable goals.

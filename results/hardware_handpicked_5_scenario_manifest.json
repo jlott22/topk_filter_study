@@ -1,0 +1,20 @@
+{
+  "grid_size": 19,
+  "logic_revision": "dcta_parity_v1",
+  "scenario_sha256": "92ebcdc84dc259fc27fc6123bef9ca9f0488a874e84e405344e349aa2d07d393",
+  "schema": 2,
+  "source_trial_ids": [
+    "4",
+    "53",
+    "232",
+    "394",
+    "473"
+  ],
+  "trial_ids": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
+}

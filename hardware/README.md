@@ -2,16 +2,29 @@
 
 Hardware-side scripts and firmware for running decentralized task-cell allocation benchmark trials with Pololu robots, ESP32 MQTT/UART bridges, and a Jetson/host metrics hub.
 
+## Current program status
+
+- `Pololu_*.py` contains temporary programs copied from the benchmark
+  hardware repository because those versions are known to boot.
+  Use these for physical startup, communication, motion, and hub testing while
+  the memory problem is investigated. They accept the hub's six Top-K study
+  values but retain the older benchmark allocator logic, so they are not valid
+  simulator-parity study implementations.
+- `../archive/in_the_works/Pololu_*.py` contains the archived
+  Top-K/simulator-parity implementations. They are preserved for memory
+  optimization and desktop parity testing, but must not be deployed for data
+  collection until physical K=361 startup and allocator smoke tests pass.
+- `metrics_hub.py` remains the controller for both sets and now restricts
+  hardware runs to the manually selected five-scenario cohort. The temporary
+  programs implement its configuration and command acknowledgment protocol
+  themselves.
+
 ## Repository Contents
 
-- `Pololu_ACBBA.py` - Pololu MicroPython implementation of ACBBA.
-- `Pololu_CBAA.py` - Pololu MicroPython implementation of CBAA.
-- `Pololu_DGA.py` - compact-population Pololu MicroPython implementation of DGA.
-- `Pololu_DMCHBA.py` - Pololu MicroPython implementation of DMCHBA.
-- `Pololu_HIPC.py` - Pololu MicroPython implementation of HIPC.
-- `Pololu_PI.py` - Pololu MicroPython implementation of PI.
-- `allocator_memory.py` - shared packed candidate and fixed cell-table
-  primitives required by ACBBA, CBAA, HIPC, and PI.
+- `Pololu_*.py` - temporary known-bootable robot programs with a lightweight
+  Top-K candidate prefilter.
+- `../archive/in_the_works/` - archived memory-heavy Top-K/parity robot
+  programs.
 - `esp32_DTA_BENCHMARK/esp32_DTA_BENCHMARK.ino` - ESP32 bridge between Pololu UART frames and MQTT topics.
 - `metrics_hub.py` - MQTT metrics collector and trial controller.
 - `../simulator/scenarios/final_trial_500.csv` - canonical validated study
@@ -24,7 +37,9 @@ Hardware-side scripts and firmware for running decentralized task-cell allocatio
 
 Each robot uses:
 
-1. A Pololu running the selected `Pololu_*.py` allocator.
+1. A Pololu running the selected `Pololu_*.py` temporary allocator or, after
+   memory acceptance, an archived `../archive/in_the_works/Pololu_*.py` study
+   allocator.
 2. An ESP32 running `esp32_DTA_BENCHMARK.ino`.
 3. MQTT broker reachable at `192.168.1.10:1883`.
 4. A host/Jetson running `metrics_hub.py`.
@@ -63,10 +78,10 @@ metrics even when its payload is malformed.
 
 1. Set the ESP32 `clientID` and `otherIDs` in `esp32_DTA_BENCHMARK.ino` for each robot.
 2. Flash the ESP32 firmware.
-3. Copy the selected Pololu algorithm file to each robot and copy
-   `allocator_memory.py` beside it. All six programs use the shared binary64
-   startup probe; the four cell-indexed allocators and DGA also use its
-   bounded-memory helpers.
+3. For temporary hardware testing, copy the selected
+   `Pololu_<ALGORITHM>.py` file to each robot as its actual startup
+   `main.py`. Set `ROBOT_ID` separately to `00`, `01`, `02`, and `03`.
+   Each program is self-contained and no second Python module is required.
 4. Confirm `metrics_hub.py` configuration:
 
 ```python
@@ -75,7 +90,7 @@ ROBOT_IDS = ["00", "01", "02", "03"]
 COMM_MODEL = "bernoulli"
 TRIAL_MODE = "clue_search"
 SCENARIO_FILE = r"..\simulator\scenarios\final_trial_500.csv"
-STUDY_MANIFEST_LOCK = r"..\results\topk_study_scenario_manifest.json"
+STUDY_MANIFEST_LOCK = r"..\results\hardware_handpicked_5_scenario_manifest.json"
 ```
 
 The canonical simulator start cells are `00=(0,0)`, `01=(0,6)`,
@@ -83,18 +98,39 @@ The canonical simulator start cells are `00=(0,0)`, `01=(0,6)`,
 Top-K hardware profile with a different grid, robot set, trial mode, horizon,
 logic revision, or a scenario whose target is on one of these starts.
 
-5. Use the selected row of
-   `../simulator/scenarios/final_trial_500.csv` (also published as JSON on
-   `hub/trial_task`) to place the physical target and clue cells.
+The temporary programs retain the older benchmark allocator logic. They apply
+the Top-K candidate count from the hub and acknowledge the required
+`dcta_parity_v1` field solely as a transport-compatibility token. The accepted
+rates are `1`, `.75`, `.5`, `.25`, `.10`, and `.05`, corresponding to K=361,
+271, 181, 90, 36, and 18. Data from these files must be labeled as temporary
+hardware testing, not as simulator-parity study results.
+
+Keep temporary host output and its scenario lock separate from study files:
+
+```powershell
+python hardware\metrics_hub.py --algorithm ACBBA --top-k-rate .10 --drop-rate 0 `
+  --out-dir hardware\hub_logs\temporary_benchmark `
+  --scenario-manifest-lock results\temporary_benchmark_manifest.json
+```
+
+Replace `ACBBA` with the flashed algorithm. Temporary robot-local metrics use
+`metrics-temp-<ALGORITHM>.txt`. Because benchmark DGA and DMCHBA use
+allocation-heavy dynamic structures, physically smoke-test K=18 first and
+increase K while monitoring for runtime memory failures.
+
+5. Choose one of the five handpicked study scenarios when prompted. The hub
+   shows its target and clue cells and publishes the selected row as JSON on
+   `hub/trial_task`.
 6. Start the robots and ESP32 bridges.
 7. Run:
 
 ```bash
-python metrics_hub.py
+python hardware/metrics_hub.py --algorithm ACBBA --trials 1
 ```
 
-The hub waits for all configured robots to return home, prompts for the
-per-trial Top-K and drop rates, and broadcasts:
+The hub is manual-only. It waits for all configured robots to return home,
+prompts for the study trial ID, Top-K rate, and drop rate, requires placement
+confirmation, and then broadcasts:
 
 ```text
 CFG,<sequence>,<top_k_ppm>,<top_k_cells>,<drop_ppm>,clue_search,<horizon>,dcta_parity_v1,<scenario_sha256>
@@ -150,18 +186,20 @@ arrival order and replayed exactly once after quorum so early steps,
 start-cell clues, and allocator traffic are not lost. `ABORT` is accepted by
 configured, ready, armed, and running robots.
 
-Before connecting to the robots, the hub hashes the exact ordered scenario
-slice selected by `--start-index` and `--trials`. By default it creates or
-checks the repository-shared
-`results/topk_study_scenario_manifest.json`; a later algorithm or Top-K
-condition is refused if its selected trial IDs or scenario contents differ.
+Before connecting to the robots, the hub loads and validates the fixed
+five-scenario cohort. By default it creates or checks the repository-shared
+`results/hardware_handpicked_5_scenario_manifest.json`; a later algorithm or
+Top-K condition is refused if the study/source ID mapping or scenario
+contents differ.
 Use `--expected-scenario-sha256 <hash>` for an additional explicit check.
 `--scenario-manifest-lock <path>` is available for a deliberately separate
 smoke-test or study cohort; every condition within that cohort must use the
 same lock path and exact selection.
 
-Interactive runs default to Top-K `1.0` (361 cells) and drop rate `0.0`.
-Pressing Enter at either condition prompt reuses the previous trial's value.
+Runs default to Top-K `1.0` (361 cells), drop rate `0.0`, and one manually
+operated trial. `--trials N` keeps the hub open for N manual trials. Pressing
+Enter at the trial-ID, Top-K, or drop-rate prompt reuses the previous value,
+so the same physical layout can remain in place while Top-K values are swept.
 After every started trial, the hub requires a yes/no response indicating
 whether any robot experienced a memory error.
 
@@ -197,6 +235,7 @@ steps after termination.
 System metrics include:
 
 - `trial_id`
+- `source_trial_id`
 - `trial_mode`
 - `algorithm`
 - `comm_model`
@@ -227,6 +266,7 @@ System metrics include:
 Robot metrics include:
 
 - `trial_id`
+- `source_trial_id`
 - `trial_mode`
 - `algorithm`
 - `comm_model`
@@ -272,21 +312,36 @@ CSV fields are `candidate_filter_calls`, `candidate_filter_time_us_total`,
 `top_k_rate`, rounded `top_k_max_cells`, `drop_rate`, and
 `config_sequence`, plus `trial_mode`, effective `commitment_horizon`,
 `logic_revision`, and `scenario_sha256`, so imported hardware results remain
-self-describing. The
-hub's system and per-robot CSVs record the acknowledged algorithm and
+self-describing. The hub's system and per-robot CSVs record the renumbered
+`trial_id`, original CSV `source_trial_id`, acknowledged algorithm and
 configuration, `algorithm_verified`, the manual `memory_error` flag, and the
-trial status. Confirmed manually stopped memory crashes use the explicit
-`memory_error_crash` status. Configuration acknowledgments are retained separately in
+trial status. System rows also retain expected and reported targets, expected
+and observed clues, unexpected clues, and location warnings. A mismatch is
+warned and audited but does not change a completed trial's status. Confirmed
+manually stopped memory crashes use the explicit `memory_error_crash` status.
+Configuration acknowledgments are retained separately in
 `<algorithm>_configuration_acks.csv`.
 
-For noninteractive runs, use `--auto --top-k-rate <rate> --drop-rate <rate>`.
-The deprecated `--comm-level` option remains an alias for `--drop-rate`.
-Automated memory status defaults to unknown and can be set with
-`--memory-error-default yes|no|unknown`.
+There is no unattended mode. Trial selection, placement confirmation,
+condition confirmation, and memory-error reporting always require an
+operator. The deprecated `--comm-level` option remains an alias for
+`--drop-rate`.
 
-## Trial ID Lookup
+## Handpicked Trial IDs
 
-The hub uses `SCENARIO_FILE` to map observed target/clue locations to a trial ID. It supports generator-style CSV columns:
+The hub loads these five rows from `SCENARIO_FILE` and renumbers them for the
+hardware study:
+
+| Study trial ID | Source episode | Target |
+|---:|---:|---:|
+| 1 | 4 | `(5,9)` |
+| 2 | 53 | `(7,2)` |
+| 3 | 232 | `(3,11)` |
+| 4 | 394 | `(5,4)` |
+| 5 | 473 | `(13,16)` |
+
+The operator selects the study ID before every trial. Repeated IDs are
+allowed within one invocation. The hub supports generator-style CSV columns:
 
 ```text
 episode,object_x,object_y,clue1_x,clue1_y,...
@@ -294,7 +349,8 @@ episode,object_x,object_y,clue1_x,clue1_y,...
 
 Comment metadata lines beginning with `#` are ignored.
 
-Scenario loading is fail-fast: coordinates must be complete integers inside
+Scenario loading is fail-fast: all five source episodes must exist,
+coordinates must be complete integers inside
 the 19x19 grid; trial IDs and clue coordinates must be unique; a target cannot
 also be a clue or a robot start. A clue is allowed on a start and is detected
 before the first movement step. The selected scenario list is hashed and that
@@ -302,15 +358,9 @@ hash must be acknowledged by every robot. The canonical input is
 `../simulator/scenarios/final_trial_500.csv`; the similarly named files under
 `../results/` are retained historical artifacts rather than default inputs.
 
-The current canonical file has raw SHA-256
-`9139f6a4fa259016f0e650489d605333758491b62151a742e406cc17dd5df085`.
-The full 500-trial ordered selection hash is
-`823213c90703fd83224ad7122ee730ba64af3769ea517af252103bddd907f681`;
-the first-300 selection hash is
-`33ddd00e9e07f86e272c4a946f91c9a9c4ee08ae6e902309b63caa0c5a8d5fa4`.
-For a smaller hardware cohort, use the hash printed by the hub for that exact
-ordered selection and keep its hardware manifest lock unchanged across every
-algorithm and Top-K condition.
+The remapped five-scenario cohort SHA-256 is
+`92ebcdc84dc259fc27fc6123bef9ca9f0488a874e84e405344e349aa2d07d393`.
+Keep its manifest lock unchanged across every algorithm and Top-K condition.
 
 ## Pre-Campaign Hardware Gates
 
@@ -319,7 +369,8 @@ timing, radio ordering, or four-robot collision behavior. Before the
 300-trial simulation campaign is treated as final, complete and record these
 physical gates in `Log.md`:
 
-1. Parse or compile every `Pololu_*.py` file with the chosen
+1. Parse or compile every archived
+   `../archive/in_the_works/Pololu_*.py` file with the chosen
    MicroPython-compatible checker.
 2. Boot every robot with the deployed firmware and confirm that the shared
    `require_binary64()` startup probe succeeds. The allocator intentionally

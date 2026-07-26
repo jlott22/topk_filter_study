@@ -1,0 +1,94 @@
+{
+  "sim_config": {
+    "trial_mode": "clue_search",
+    "grid_size": 14,
+    "robot_ids": [
+      "00",
+      "01",
+      "02",
+      "03"
+    ],
+    "start_positions": {
+      "00": [
+        0,
+        0
+      ],
+      "01": [
+        0,
+        4
+      ],
+      "02": [
+        0,
+        9
+      ],
+      "03": [
+        0,
+        13
+      ]
+    },
+    "start_headings": {
+      "00": [
+        1,
+        0
+      ],
+      "01": [
+        1,
+        0
+      ],
+      "02": [
+        1,
+        0
+      ],
+      "03": [
+        1,
+        0
+      ]
+    },
+    "robot_start_layout": "edge_even",
+    "condition_id": "scale_g14_r4_acbba_topk010",
+    "target_cells_per_robot": 49.0,
+    "actual_cells_per_robot": 49.0,
+    "target_decay_exp": 1.0,
+    "reward_factor": 5.0,
+    "move_cost": 1.0,
+    "turn_cost": 0.3,
+    "visited_step_penalty": 4.0,
+    "min_step_cost": 0.01,
+    "async_step_mean_s": 1.6,
+    "async_step_jitter_s": 0.1,
+    "async_min_delay_s": 1.5,
+    "async_max_delay_s": 1.7,
+    "async_initial_spread_s": 0.1,
+    "async_tick_span_s": 0.25,
+    "turn_quarter_s": 0.3,
+    "replan_delay_s": 0.3,
+    "no_goal_delay_s": 0.5,
+    "comm_delay_s": 0.04,
+    "comm_delay_jitter_s": 0.01,
+    "collision_intent_settle_s": 0.1,
+    "collision_goal_backoff_max_s": 5.0,
+    "debug_max_events": 20000,
+    "write_parquet": false,
+    "commitment_horizon": 3,
+    "max_candidate_cells": 20,
+    "top_k_rate": 0.1,
+    "logic_revision": "dcta_parity_v1",
+    "study_profile": "custom",
+    "scenario_file_sha256": "d9da52d694264b0e61eacce63be8c39aec13a5d875ee1a04def1cc4de76c9066",
+    "scenario_selection_sha256": "ff3ae3e0de6c3e3e7eb1071deaf59fde03942073a583d40c1cb3fff598a15b89"
+  },
+  "logic_revision": "dcta_parity_v1",
+  "scenario_file_sha256": "d9da52d694264b0e61eacce63be8c39aec13a5d875ee1a04def1cc4de76c9066",
+  "scenario_selection_sha256": "ff3ae3e0de6c3e3e7eb1071deaf59fde03942073a583d40c1cb3fff598a15b89",
+  "expected_scenario_sha256": "",
+  "scenario_manifest_lock": "",
+  "algorithm": "benchmark_sim.algorithms.ACBBA:ACBBAAllocator",
+  "algorithm_name": "ACBBA",
+  "comm_model": "ideal",
+  "comm_level": "1.0",
+  "scenario_file": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\scenarios\\clue_g14_n50.csv",
+  "trial_mode": "clue_search",
+  "study_profile": "custom",
+  "seed": 834126,
+  "retry_failed": false
+}

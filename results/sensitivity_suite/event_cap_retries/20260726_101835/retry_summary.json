@@ -1,0 +1,7 @@
+{
+  "completed_at_unix": 1785091494.1704361,
+  "conditions_retried": 18,
+  "trials_retried": 20,
+  "remaining_failures": 16,
+  "verification_issues": 0
+}

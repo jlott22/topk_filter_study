@@ -6,6 +6,8 @@ Compatible robot commands on hub/command:
   "CMD,PRESTART,N", "CMD,START,N", "CMD,RUN,N", and "CMD,ABORT,N" use
   the applied configuration sequence and require per-robot acknowledgments.
 A JSON scenario is also published on hub/trial_task for operator/host tooling.
+The operator manually selects one of five handpicked CSV scenarios before
+every trial.
 Robot allocation payloads on topic 3 are recorded verbatim. Topic 6 is
 reserved for configuration and control acknowledgments.
 """
@@ -47,7 +49,7 @@ STUDY_MANIFEST_LOCK = os.path.abspath(
         os.path.dirname(__file__),
         "..",
         "results",
-        "topk_study_scenario_manifest.json",
+        "hardware_handpicked_5_scenario_manifest.json",
     )
 )
 OUT_DIR = "./hub_logs"
@@ -64,6 +66,17 @@ TRIAL_MODE = "clue_search"
 LOGIC_REVISION = "dcta_parity_v1"
 DEFAULT_COMMITMENT_HORIZON = 3
 MANUAL_STOP_KEY = "m"
+HANDPICKED_SOURCE_IDS = ("4", "53", "232", "394", "473")
+HANDPICKED_TARGETS = (
+    (5, 9),
+    (7, 2),
+    (3, 11),
+    (5, 4),
+    (13, 16),
+)
+HANDPICKED_COHORT_SHA256 = (
+    "92ebcdc84dc259fc27fc6123bef9ca9f0488a874e84e405344e349aa2d07d393"
+)
 
 
 class ConfigurationError(RuntimeError):
@@ -153,8 +166,11 @@ class TerminalKeyReader:
 
 
 class Scenario:
-    def __init__(self, trial_id, target, clues):
-        self.trial_id = trial_id
+    def __init__(self, trial_id, target, clues, source_trial_id=None):
+        self.trial_id = str(trial_id)
+        self.source_trial_id = str(
+            trial_id if source_trial_id is None else source_trial_id
+        )
         self.target = target
         self.clues = clues
 
@@ -180,6 +196,8 @@ class Trial:
         self.messages = {d: 0 for d in "123456"}
         self.post_messages = {d: 0 for d in "123456"}
         self.clues = []
+        self.unexpected_clues = []
+        self.location_warnings = []
         self.events = []
         self.t0 = 0.0
         self.first_clue = None
@@ -498,6 +516,61 @@ def load_scenarios(
     return result
 
 
+def handpicked_scenarios(scenarios: Iterable[Scenario]) -> List[Scenario]:
+    """Return the fixed hardware cohort, renumbered to study IDs 1 through 5."""
+
+    by_source: Dict[str, Scenario] = {}
+    for scenario in scenarios:
+        source_id = str(scenario.source_trial_id)
+        if source_id in by_source:
+            raise ValueError("duplicate source trial ID: {}".format(source_id))
+        by_source[source_id] = scenario
+
+    missing = [
+        source_id
+        for source_id in HANDPICKED_SOURCE_IDS
+        if source_id not in by_source
+    ]
+    if missing:
+        raise ValueError(
+            "scenario file is missing handpicked source trial IDs: {}".format(
+                missing
+            )
+        )
+
+    selected = []
+    for index, (source_id, expected_target) in enumerate(
+        zip(HANDPICKED_SOURCE_IDS, HANDPICKED_TARGETS),
+        1,
+    ):
+        source = by_source[source_id]
+        if source.target != expected_target:
+            raise ValueError(
+                "source trial {} target is {}, expected {}".format(
+                    source_id,
+                    source.target,
+                    expected_target,
+                )
+            )
+        selected.append(
+            Scenario(
+                str(index),
+                source.target,
+                list(source.clues),
+                source_trial_id=source_id,
+            )
+        )
+    cohort_hash = scenario_manifest_sha256(selected)
+    if cohort_hash != HANDPICKED_COHORT_SHA256:
+        raise ValueError(
+            "handpicked cohort SHA-256 {} does not match expected {}".format(
+                cohort_hash,
+                HANDPICKED_COHORT_SHA256,
+            )
+        )
+    return selected
+
+
 def scenario_manifest_sha256(scenarios: Iterable[Scenario]) -> str:
     manifest = [
         {
@@ -526,11 +599,14 @@ def enforce_scenario_manifest_lock(
     selected = list(scenarios)
     manifest_hash = scenario_manifest_sha256(selected)
     record = {
-        "schema": 1,
+        "schema": 2,
         "grid_size": int(grid_size),
         "logic_revision": LOGIC_REVISION,
         "scenario_sha256": manifest_hash,
         "trial_ids": [str(scenario.trial_id) for scenario in selected],
+        "source_trial_ids": [
+            str(scenario.source_trial_id) for scenario in selected
+        ],
     }
     lock_path = os.path.abspath(path)
     parent = os.path.dirname(lock_path)
@@ -546,10 +622,12 @@ def enforce_scenario_manifest_lock(
                 "cannot read scenario manifest lock {}".format(lock_path)
             ) from error
         for field in (
+            "schema",
             "grid_size",
             "logic_revision",
             "scenario_sha256",
             "trial_ids",
+            "source_trial_ids",
         ):
             if existing.get(field) != record[field]:
                 raise ValueError(
@@ -599,6 +677,28 @@ def gini(values: Iterable[float]) -> float:
     return 2 * weighted / (count * total) - (count + 1) / count
 
 
+def trial_task_payload(trial: Trial, algorithm: str) -> str:
+    scenario = trial.scenario
+    return json.dumps({
+        "run_id": trial.run_id,
+        "trial_id": scenario.trial_id,
+        "source_trial_id": scenario.source_trial_id,
+        "algorithm": algorithm,
+        "algorithm_verified": trial.algorithm_verified,
+        "comm_level": trial.drop_rate,
+        "drop_rate": trial.drop_rate,
+        "top_k_rate": trial.top_k_rate,
+        "top_k_max_cells": trial.top_k_max_cells,
+        "config_sequence": trial.config_sequence,
+        "trial_mode": trial.trial_mode,
+        "commitment_horizon": trial.commitment_horizon,
+        "logic_revision": trial.logic_revision,
+        "scenario_sha256": trial.scenario_sha256,
+        "target": scenario.target,
+        "clues": scenario.clues,
+    }, separators=(",", ":"))
+
+
 class Hub:
     def __init__(self, args: argparse.Namespace, scenarios: List[Scenario]):
         if mqtt is None:
@@ -606,6 +706,9 @@ class Hub:
                 "paho-mqtt is required; install it with: python3 -m pip install paho-mqtt"
             )
         self.args, self.scenarios, self.ids = args, scenarios, args.robot_ids
+        self.scenario_by_id = {
+            scenario.trial_id: scenario for scenario in scenarios
+        }
         self.scenario_sha256 = scenario_manifest_sha256(scenarios)
         self.condition = threading.Condition()
         self.connected = threading.Event()
@@ -663,6 +766,10 @@ class Hub:
                         wall,
                         self.trial.run_id if self.trial else "",
                         self.trial.scenario.trial_id if self.trial else "",
+                        (
+                            self.trial.scenario.source_trial_id
+                            if self.trial else ""
+                        ),
                         rid,
                         acknowledgment["sequence"],
                         acknowledgment["algorithm"],
@@ -723,6 +830,7 @@ class Hub:
                         wall,
                         trial.run_id if trial else "",
                         trial.scenario.trial_id if trial else "",
+                        trial.scenario.source_trial_id if trial else "",
                         rid,
                         control_ack["sequence"],
                         control_ack["robot_id"],
@@ -765,6 +873,7 @@ class Hub:
                     wall,
                     trial.run_id if trial else "",
                     trial.scenario.trial_id if trial else "",
+                    trial.scenario.source_trial_id if trial else "",
                     rid,
                     "",
                     "",
@@ -790,7 +899,8 @@ class Hub:
                     else "ready"
                 )
                 trial.events.append([
-                    trial.run_id, trial.scenario.trial_id, wall, relative, phase,
+                    trial.run_id, trial.scenario.trial_id,
+                    trial.scenario.source_trial_id, wall, relative, phase,
                     rid, digit, TOPIC_CATEGORY[digit], payload,
                     coordinate[0] if coordinate else "", coordinate[1] if coordinate else "",
                 ])
@@ -825,6 +935,17 @@ class Hub:
         elif digit == "4" and coordinate is not None:
             if coordinate not in trial.clues:
                 trial.clues.append(coordinate)
+            if (
+                coordinate not in trial.scenario.clues
+                and coordinate not in trial.unexpected_clues
+            ):
+                trial.unexpected_clues.append(coordinate)
+                warning = "unexpected clue {} for trial {}".format(
+                    coordinate,
+                    trial.scenario.trial_id,
+                )
+                trial.location_warnings.append(warning)
+                print("[LOCATION WARNING] {}".format(warning))
             if trial.first_clue is None:
                 trial.first_clue = relative
             print(f"[CLUE] robot={rid} cell={coordinate}")
@@ -840,6 +961,13 @@ class Hub:
             trial.end_time, trial.reporter, trial.reported_target = relative, rid, coordinate
             trial.active = False
             print(f"[TARGET] t={relative:.3f}s robot={rid} cell={coordinate}")
+            if coordinate != trial.scenario.target:
+                warning = "reported target {} does not match expected {}".format(
+                    coordinate,
+                    trial.scenario.target,
+                )
+                trial.location_warnings.append(warning)
+                print("[LOCATION WARNING] {}".format(warning))
 
     @staticmethod
     def _record_logical_step(
@@ -866,7 +994,37 @@ class Hub:
         result = self.client.publish(topic, payload, qos=0, retain=False)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             raise RuntimeError(f"publish failed rc={result.rc} topic={topic}")
-        self.commands.append([time.time(), trial.run_id, trial.scenario.trial_id, kind, topic, payload])
+        self.commands.append([
+            time.time(),
+            trial.run_id,
+            trial.scenario.trial_id,
+            trial.scenario.source_trial_id,
+            kind,
+            topic,
+            payload,
+        ])
+
+    def prompt_scenario(self, previous_id: Optional[str]) -> Scenario:
+        print("\nAvailable hardware scenarios:")
+        for scenario in self.scenarios:
+            print(
+                "  trial {}: target={} (source episode {})".format(
+                    scenario.trial_id,
+                    scenario.target,
+                    scenario.source_trial_id,
+                )
+            )
+        while True:
+            default = " [{}]".format(previous_id) if previous_id else ""
+            raw = input("Trial ID{}: ".format(default)).strip()
+            selected_id = previous_id if not raw else raw
+            if selected_id in self.scenario_by_id:
+                return self.scenario_by_id[selected_id]
+            print(
+                "[INVALID] choose one of {}".format(
+                    ",".join(scenario.trial_id for scenario in self.scenarios)
+                )
+            )
 
     def prompt_rate(self, label: str, current: float, *, allow_zero: bool) -> Tuple[int, float]:
         while True:
@@ -1004,8 +1162,6 @@ class Hub:
                 return
 
             print(f"[CONFIG ERROR] {error}")
-            if self.args.auto:
-                raise ConfigurationError(error)
             input("Recover/restart the affected robots, return them home, then press Enter: ")
             self.wait_home()
 
@@ -1219,9 +1375,7 @@ class Hub:
 
     def wait_target(self, trial: Trial):
         deadline = time.monotonic() + self.args.trial_timeout
-        key_reader = TerminalKeyReader(
-            enabled=not getattr(self.args, "auto", False)
-        )
+        key_reader = TerminalKeyReader(enabled=True)
         with key_reader:
             if key_reader.active:
                 print(
@@ -1229,7 +1383,7 @@ class Hub:
                     "record a suspected robot crash.",
                     flush=True,
                 )
-            elif not getattr(self.args, "auto", False):
+            else:
                 print(
                     "[ACTIVE] Single-key input is unavailable; press Ctrl+C "
                     "to stop this trial.",
@@ -1265,22 +1419,21 @@ class Hub:
             current_drop_ppm = rate_to_ppm(
                 self.args.drop_rate, allow_zero=True
             )
-            for number, scenario in enumerate(self.scenarios, 1):
+            previous_scenario_id = None
+            for number in range(1, self.args.trials + 1):
                 self.wait_home()
-                if not self.args.auto:
-                    current_top_k_ppm, current_top_k_rate = self.prompt_rate(
-                        "Top-K rate",
-                        ppm_to_rate(current_top_k_ppm),
-                        allow_zero=False,
-                    )
-                    current_drop_ppm, current_drop_rate = self.prompt_rate(
-                        "Drop rate",
-                        ppm_to_rate(current_drop_ppm),
-                        allow_zero=True,
-                    )
-                else:
-                    current_top_k_rate = ppm_to_rate(current_top_k_ppm)
-                    current_drop_rate = ppm_to_rate(current_drop_ppm)
+                scenario = self.prompt_scenario(previous_scenario_id)
+                previous_scenario_id = scenario.trial_id
+                current_top_k_ppm, current_top_k_rate = self.prompt_rate(
+                    "Top-K rate",
+                    ppm_to_rate(current_top_k_ppm),
+                    allow_zero=False,
+                )
+                current_drop_ppm, current_drop_rate = self.prompt_rate(
+                    "Drop rate",
+                    ppm_to_rate(current_drop_ppm),
+                    allow_zero=True,
+                )
 
                 run_id = f"{int(time.time())}-{number:04d}"
                 robots = {rid: RobotState(last_pos=self.positions.get(rid)) for rid in self.ids}
@@ -1297,26 +1450,21 @@ class Hub:
                     trial, current_top_k_ppm, current_drop_ppm
                 )
                 trial.onboard_baseline = self.onboard_counts()
-                task = json.dumps({
-                    "run_id": run_id, "trial_id": scenario.trial_id,
-                    "algorithm": self.args.algorithm,
-                    "algorithm_verified": trial.algorithm_verified,
-                    "comm_level": trial.drop_rate,
-                    "drop_rate": trial.drop_rate,
-                    "top_k_rate": trial.top_k_rate,
-                    "top_k_max_cells": trial.top_k_max_cells,
-                    "config_sequence": trial.config_sequence,
-                    "trial_mode": trial.trial_mode,
-                    "commitment_horizon": trial.commitment_horizon,
-                    "logic_revision": trial.logic_revision,
-                    "scenario_sha256": trial.scenario_sha256,
-                    "target": scenario.target, "clues": scenario.clues,
-                }, separators=(",", ":"))
+                task = trial_task_payload(trial, self.args.algorithm)
                 self.publish(HUB_TASK_TOPIC, task, "trial_task", trial)
-                print(f"\n[TASK {number}/{len(self.scenarios)}] id={scenario.trial_id}")
+                print(
+                    "\n[TASK {}/{}] id={} source_episode={}".format(
+                        number,
+                        self.args.trials,
+                        scenario.trial_id,
+                        scenario.source_trial_id,
+                    )
+                )
                 print(f"  target={scenario.target} clues={scenario.clues}")
-                if not self.args.auto:
-                    input("Place the target/clues, then press Enter: ")
+                input(
+                    "Confirm the target/clues match this scenario, "
+                    "then press Enter: "
+                )
                 fatal_control_error = None
                 try:
                     self.transition_robots(trial, "PRESTART", "READY")
@@ -1416,15 +1564,7 @@ class Hub:
                         )
                 finally:
                     time.sleep(self.args.drain_seconds)
-                    if self.args.auto:
-                        value = self.args.memory_error_default
-                        memory_error = (
-                            True if value == "yes"
-                            else False if value == "no"
-                            else None
-                        )
-                    else:
-                        memory_error = self.prompt_memory_error()
+                    memory_error = self.prompt_memory_error()
                     record_memory_error_result(trial, memory_error)
                     self.write_trial(trial)
                     self.import_onboard(trial)
@@ -1434,7 +1574,7 @@ class Hub:
 
                 if fatal_control_error is not None:
                     raise fatal_control_error
-                if trial.memory_error and not self.args.auto:
+                if trial.memory_error:
                     input("Recover/reset the robots, then press Enter to continue: ")
         finally:
             self.write_commands()
@@ -1455,14 +1595,16 @@ class Hub:
         post_total = sum(trial.post_messages.values())
         post_allocation = sum(trial.post_messages[d] for d in ALLOCATION)
         sys_header = [
-            "run_id", "trial_id", "algorithm", "algorithm_verified",
+            "run_id", "trial_id", "source_trial_id",
+            "algorithm", "algorithm_verified",
             "comm_level", "drop_rate", "top_k_rate", "top_k_max_cells",
             "trial_mode", "commitment_horizon", "logic_revision",
             "scenario_sha256",
             "memory_error", "trial_status", "failure_reason",
             "config_sequence", "expected_target",
             "reported_target", "target_match", "target_reporter", "duration_s",
-            "first_clue_s", "observed_clues", "total_team_steps",
+            "first_clue_s", "expected_clues", "observed_clues",
+            "unexpected_clues", "location_warning", "total_team_steps",
             "steps_before_first_clue", "post_clue_steps_to_find",
             "unique_cells_searched", "system_revisits", "messages_sent_total",
             "messages_delivered_total", "protected_messages_sent_total",
@@ -1473,7 +1615,8 @@ class Hub:
         ]
         reported = trial.reported_target
         sys_row = [
-            trial.run_id, trial.scenario.trial_id, self.args.algorithm,
+            trial.run_id, trial.scenario.trial_id,
+            trial.scenario.source_trial_id, self.args.algorithm,
             int(trial.algorithm_verified), trial.drop_rate, trial.drop_rate,
             trial.top_k_rate, trial.top_k_max_cells,
             trial.trial_mode, trial.commitment_horizon,
@@ -1484,7 +1627,10 @@ class Hub:
             f"{reported[0]}/{reported[1]}" if reported else "",
             int(reported == trial.scenario.target), trial.reporter,
             trial.end_time, trial.first_clue if trial.first_clue is not None else "",
-            ";".join(f"{x}/{y}" for x, y in trial.clues), total_steps,
+            ";".join(f"{x}/{y}" for x, y in trial.scenario.clues),
+            ";".join(f"{x}/{y}" for x, y in trial.clues),
+            ";".join(f"{x}/{y}" for x, y in trial.unexpected_clues),
+            "; ".join(trial.location_warnings), total_steps,
             pre_steps, post_steps, unique, revisits, message_total,
             message_total * max(0, len(self.ids) - 1), categories["protected"],
             categories["unprotected"], categories["core"], categories["allocation"],
@@ -1494,7 +1640,8 @@ class Hub:
         csv_append(prefix + "_sys.csv", sys_header, [sys_row])
 
         robot_header = [
-            "run_id", "trial_id", "algorithm", "algorithm_verified",
+            "run_id", "trial_id", "source_trial_id",
+            "algorithm", "algorithm_verified",
             "comm_level", "drop_rate", "top_k_rate", "top_k_max_cells",
             "trial_mode", "commitment_horizon", "logic_revision",
             "scenario_sha256",
@@ -1512,7 +1659,8 @@ class Hub:
             totals = category_totals(robot.messages)
             delivered = sum(sum(trial.robots[other].messages.values()) for other in self.ids if other != rid)
             robot_rows.append([
-                trial.run_id, trial.scenario.trial_id, self.args.algorithm,
+                trial.run_id, trial.scenario.trial_id,
+                trial.scenario.source_trial_id, self.args.algorithm,
                 int(trial.algorithm_verified), trial.drop_rate, trial.drop_rate,
                 trial.top_k_rate, trial.top_k_max_cells,
                 trial.trial_mode, trial.commitment_horizon,
@@ -1531,7 +1679,8 @@ class Hub:
             ])
         csv_append(prefix + "_robots.csv", robot_header, robot_rows)
         csv_append(prefix + "_events.csv", [
-            "run_id", "trial_id", "wall_time_s", "relative_time_s", "phase",
+            "run_id", "trial_id", "source_trial_id",
+            "wall_time_s", "relative_time_s", "phase",
             "robot_id", "topic_digit", "category", "payload", "x", "y",
         ], trial.events)
 
@@ -1557,12 +1706,19 @@ class Hub:
                 print(f"[WARN] no new onboard metric row for robot {rid}")
                 continue
             row = dict(records[-1])
-            row.update({"run_id": trial.run_id, "trial_id": trial.scenario.trial_id, "source_robot_id": rid})
+            row.update({
+                "run_id": trial.run_id,
+                "trial_id": trial.scenario.trial_id,
+                "source_trial_id": trial.scenario.source_trial_id,
+                "source_robot_id": rid,
+            })
             rows.append(row)
             fields.update(row)
         if not rows:
             return
-        preferred = ["run_id", "trial_id", "source_robot_id"]
+        preferred = [
+            "run_id", "trial_id", "source_trial_id", "source_robot_id"
+        ]
         names = preferred + sorted(fields - set(preferred))
         path = os.path.join(self.args.out_dir, f"{self.args.algorithm}_onboard.csv")
         write_header = not os.path.exists(path) or os.path.getsize(path) == 0
@@ -1591,7 +1747,10 @@ class Hub:
 
     def write_commands(self):
         csv_append(os.path.join(self.args.out_dir, f"{self.args.algorithm}_commands.csv"),
-                   ["wall_time_s", "run_id", "trial_id", "kind", "topic", "payload"],
+                   [
+                       "wall_time_s", "run_id", "trial_id",
+                       "source_trial_id", "kind", "topic", "payload",
+                   ],
                    self.commands)
 
     def write_config_acks(self):
@@ -1601,7 +1760,8 @@ class Hub:
                 f"{self.args.algorithm}_configuration_acks.csv",
             ),
             [
-                "wall_time_s", "run_id", "trial_id", "robot_id",
+                "wall_time_s", "run_id", "trial_id", "source_trial_id",
+                "robot_id",
                 "config_sequence", "algorithm", "top_k_ppm",
                 "top_k_max_cells", "drop_ppm", "trial_mode",
                 "commitment_horizon", "logic_revision",
@@ -1617,12 +1777,23 @@ class Hub:
                 f"{self.args.algorithm}_control_acks.csv",
             ),
             [
-                "wall_time_s", "run_id", "trial_id", "topic_robot_id",
+                "wall_time_s", "run_id", "trial_id", "source_trial_id",
+                "topic_robot_id",
                 "config_sequence", "payload_robot_id", "state",
                 "robot_id_match",
             ],
             self.control_ack_rows,
         )
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
 
 
 def parser():
@@ -1671,13 +1842,16 @@ def parser():
         "--scenario-manifest-lock",
         help=(
             "shared cross-condition manifest lock path; defaults to "
-            "results/topk_study_scenario_manifest.json"
+            "results/hardware_handpicked_5_scenario_manifest.json"
         ),
     )
-    result.add_argument("--start-index", type=int, default=0)
-    result.add_argument("--trials", type=int, default=1, help="0 means all remaining")
+    result.add_argument(
+        "--trials",
+        type=positive_int,
+        default=1,
+        help="number of manually operated trials",
+    )
     result.add_argument("--out-dir", default=OUT_DIR)
-    result.add_argument("--auto", action="store_true")
     result.add_argument("--connect-timeout", type=float, default=15)
     result.add_argument("--ready-timeout", type=float, default=300)
     result.add_argument("--quiet-window", type=float, default=1)
@@ -1690,12 +1864,6 @@ def parser():
     result.add_argument("--config-retry-seconds", type=float, default=1)
     result.add_argument("--control-timeout", type=float, default=15)
     result.add_argument("--control-retry-seconds", type=float, default=1)
-    result.add_argument(
-        "--memory-error-default",
-        choices=("yes", "no", "unknown"),
-        default="unknown",
-        help="memory status recorded by --auto runs",
-    )
     return result
 
 
@@ -1714,9 +1882,7 @@ def main():
     except ValueError as error:
         raise SystemExit(f"[ERR] {error}") from error
     if (
-        args.start_index < 0
-        or args.trials < 0
-        or args.config_timeout <= 0
+        args.config_timeout <= 0
         or args.config_retry_seconds <= 0
         or args.control_timeout <= 0
         or args.control_retry_seconds <= 0
@@ -1740,23 +1906,15 @@ def main():
     args.drop_rate = ppm_to_rate(drop_ppm)
     args.comm_level = args.drop_rate
     args.top_k_max_cells = top_k_cells(args.grid_size, top_k_ppm)
-    scenarios = load_scenarios(
-        args.scenario_file,
-        grid_size=args.grid_size,
-        starts=(HOME[rid] for rid in args.robot_ids),
-        expected_clues=args.expected_clues,
-    )
-    scenarios = scenarios[args.start_index:]
-    if args.trials:
-        scenarios = scenarios[:args.trials]
-        if len(scenarios) != args.trials:
-            raise SystemExit(
-                "[ERR] requested {} trials but only {} valid scenarios remain".format(
-                    args.trials, len(scenarios)
-                )
-            )
-    if not scenarios:
-        raise SystemExit("[ERR] no scenarios selected")
+    try:
+        scenarios = handpicked_scenarios(load_scenarios(
+            args.scenario_file,
+            grid_size=args.grid_size,
+            starts=(HOME[rid] for rid in args.robot_ids),
+            expected_clues=args.expected_clues,
+        ))
+    except ValueError as error:
+        raise SystemExit("[ERR] {}".format(error)) from error
     selected_sha256 = scenario_manifest_sha256(scenarios)
     expected_sha256 = (
         args.expected_scenario_sha256.strip().lower()
@@ -1788,7 +1946,7 @@ def main():
         "[CONFIG] algorithm={} trials={} robots={} top_k={} ({} cells) "
         "drop_rate={} mode={} horizon={} revision={} manifest={}".format(
             args.algorithm,
-            len(scenarios),
+            args.trials,
             args.robot_ids,
             args.top_k_rate,
             args.top_k_max_cells,

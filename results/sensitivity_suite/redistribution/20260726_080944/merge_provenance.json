@@ -1,0 +1,70 @@
+[
+  {
+    "condition_id": "scale_g28_r4_dmchba_topk100",
+    "merged_at_unix": 1785084071.063986,
+    "trials_added": [
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49
+    ],
+    "backup_dir": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\redistribution\\20260726_080944\\canonical_backup\\scale_g28_r4_dmchba_topk100",
+    "canonical_out_dir": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\raw\\scale\\scale_g28_r4\\dmchba\\topk_100",
+    "canonical_hashes": {
+      "trial_summary.csv": "3f4527ab3839a75e433b7d6cb107314e6252d31983966fb479e1bd74c5426505",
+      "system_performance.csv": "f9968fff9d558e87d1ce5e7c5db33ba0dc2fc9ad4633c12b1bfe000976c56f09",
+      "robot_performance.csv": "7995564c9843944ce36c6ca80c848180f3db737e23c3f6a727eb861699827223",
+      "computational_performance.csv": "d22e0e49771f755b640287435e3597ba4495e1b3aa2e6ec2ee8aa2cd3d92de7e"
+    }
+  },
+  {
+    "condition_id": "scale_g28_r4_dmchba_topk075",
+    "merged_at_unix": 1785084071.135775,
+    "trials_added": [
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49
+    ],
+    "backup_dir": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\redistribution\\20260726_080944\\canonical_backup\\scale_g28_r4_dmchba_topk075",
+    "canonical_out_dir": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\raw\\scale\\scale_g28_r4\\dmchba\\topk_075",
+    "canonical_hashes": {
+      "trial_summary.csv": "e14b187c0e9afeeb8865889392f626cb6e4e750a1b8b03e21e21b4eec623d7ee",
+      "system_performance.csv": "8a23562d786af5f4179bc9a3a7d18356ad4f46eb777c0d018a2ff3f879fe8990",
+      "robot_performance.csv": "700cc2843f2a39b149300a8521091e8830fe1f46cfd3d31dc26f162f00c3771b",
+      "computational_performance.csv": "04e7013d637f48cc0620ccff8dd6dcf7b5318eb4497e075818b1f0c3fd31dc9e"
+    }
+  }
+]

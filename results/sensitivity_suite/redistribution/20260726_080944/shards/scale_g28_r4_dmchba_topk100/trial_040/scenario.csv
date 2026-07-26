@@ -1,0 +1,4 @@
+# scenario_set=topk_readonly_sensitivity_redistributed
+# source_trial_id=40
+trial_id,episode,object_x,object_y,target_x,target_y,clue1_x,clue1_y,clue2_x,clue2_y,clue3_x,clue3_y,clue4_x,clue4_y
+40,40,18,21,18,21,25,12,22,25,17,16,6,14

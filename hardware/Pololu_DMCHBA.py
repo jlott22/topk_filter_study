@@ -15,9 +15,6 @@
 # ===========================================================
 # Pololu 3pi+ 2040 OLED — DMCHBA Coordinated Search (UART → ESP32 → MQTT)
 # ===========================================================
-# Memory-optimized active version. The original allocator is preserved at
-# archive/Pololu_DMCHBA_unoptimized.py and regression-tested against this file.
-#
 # Runs on the Pololu 3pi+ 2040 OLED using MicroPython.
 # Communication uses simple text frames over UART; an attached ESP32 relays
 # those frames to MQTT topics.
@@ -44,6 +41,12 @@
 #   * Tune yaw timings (cfg.YAW_90_MS / cfg.YAW_180_MS) for your platform.
 
 # ===========================================================
+# TEMPORARY HARDWARE-TEST PROGRAM
+# Copied from dtca_benchmark_hardware because that version is known to boot.
+# This is benchmark allocator logic with a hub-configured Top-K prefilter, not
+# the parity-study implementation. Its dcta_parity_v1 ACK is transport
+# compatibility for the unchanged hub, not a claim of allocator parity.
+# ===========================================================
 import random
 import time
 import _thread
@@ -51,39 +54,33 @@ import heapq
 import sys
 import gc
 from array import array
-from allocator_memory import require_binary64
 from machine import UART, Pin
 from pololu_3pi_2040_robot import robot
 from pololu_3pi_2040_robot.extras import editions
 from pololu_3pi_2040_robot.buzzer import Buzzer
 
-require_binary64()
-
 # -----------------------------
 # Robot identity & start pose
 # -----------------------------
 ROBOT_ID = "03"  # set to "00", "01", "02", or "03" at deployment
-ALGORITHM_NAME = "DMCHBA"
 GRID_SIZE = 19
-EPS = 1.0e-9
+ALGORITHM_NAME = "DMCHBA"
 TRIAL_MODE = "clue_search"
 LOGIC_REVISION = "dcta_parity_v1"
 COMMITMENT_HORIZON = 3
-# Fraction of total grid cells retained by the post-clue candidate prefilter.
-TOP_K_PERCENT = 1.0
-if not (0.0 < TOP_K_PERCENT <= 1.0):
-    raise ValueError("TOP_K_PERCENT must be greater than 0 and at most 1")
-TOP_K_MAX_CELLS = max(1, int(GRID_SIZE * GRID_SIZE * TOP_K_PERCENT + 0.5))
+CONFIG_RATE_SCALE = 1000000
+FULL_MAP_CELLS = GRID_SIZE * GRID_SIZE
+TOP_K_MAX_CELLS = FULL_MAP_CELLS
+applied_top_k_ppm = CONFIG_RATE_SCALE
 
 DEBUG_LOG_FILE = "debug-log.txt"
 
-METRICS_LOG_FILE = "metrics-log-DMCHBA.txt"
+METRICS_LOG_FILE = "metrics-temp-DMCHBA.txt"
 BOOT_TIME_MS = time.ticks_ms()
 METRIC_START_TIME_MS = None  # set after first post-calibration intersection
 start_signal = False  # set when hub command received
 pre_start_signal = False  # set when hub pre-start command received
 trial_active = False       # True only while trial metrics/search are active
-abort_signal = False       # wake a stationary controller after an armed abort
 returning_home = False     # suppress target completion while navigating home
 return_home_blocked = False # bump detected during an unmetered return-home move
 intersection_count = 0          # steps taken by this robot
@@ -98,36 +95,18 @@ NUM_ROBOTS = len(TEAM_IDS)
 
 #expiremental variables
 msg_drop_rate = 0  # simulated message drop rate (0.0 to 1.0)
-CONFIG_RATE_SCALE = 1000000
 applied_config_sequence = 0
-applied_top_k_ppm = CONFIG_RATE_SCALE
-applied_drop_ppm = 0
-applied_trial_mode = TRIAL_MODE
-applied_commitment_horizon = COMMITMENT_HORIZON
-applied_logic_revision = LOGIC_REVISION
-applied_scenario_sha256 = ""
-last_config_request = None
-last_config_status = "OK"
+applied_config_request = None
 control_state = "BOOT"
 
 _metrics_logged = False
 _metrics_cache = None
-metrics_frozen = False
-metric_freeze_time_ms = None
-terminal_target_step_counted = False
 
 buzzer = None  # replaced after hardware initialization
 
 # Energy/Time metrics
 motor_time_ms = 0              # cumulative ms motors were commanded non-zero
 _motor_start_ms = None         # internal tracker for motor activity
-candidate_filter_calls = 0
-candidate_filter_time_us_total = 0
-candidate_filter_time_us_max = 0
-allocator_solve_time_us_total = 0
-allocator_time_us_total = 0
-allocator_calls = 0
-allocator_time_us_max = 0
 
 def finalize_motor_time(now_ticks=None):
     """Ensure motor_time_ms captures any active span before sampling metrics."""
@@ -171,43 +150,10 @@ def busy_timer_value_ms():
     return _busy_accum_us // 1000
 
 
-def record_candidate_filter_time(start_us):
-    global candidate_filter_calls, candidate_filter_time_us_total, candidate_filter_time_us_max
-    if metrics_frozen:
-        return
-    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
-    candidate_filter_calls += 1
-    candidate_filter_time_us_total += elapsed_us
-    if elapsed_us > candidate_filter_time_us_max:
-        candidate_filter_time_us_max = elapsed_us
-
-
-def record_allocator_solve_time(start_us, filter_time_before_us):
-    global allocator_solve_time_us_total
-    if metrics_frozen:
-        return
-    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
-    filter_us = max(0, candidate_filter_time_us_total - filter_time_before_us)
-    allocator_solve_time_us_total += max(0, elapsed_us - filter_us)
-
-
-def record_allocator_time(start_us):
-    global allocator_calls, allocator_time_us_total, allocator_time_us_max
-    if metrics_frozen:
-        return
-    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
-    allocator_calls += 1
-    allocator_time_us_total += elapsed_us
-    if elapsed_us > allocator_time_us_max:
-        allocator_time_us_max = elapsed_us
-
-
 def update_mem_headroom():
     """Refresh current free heap measurement and track the lowest observed value."""
     global mem_free_min
     current = gc.mem_free()
-    if metrics_frozen:
-        return current
     if current < mem_free_min:
         mem_free_min = current
     return current
@@ -218,13 +164,9 @@ def reset_trial_metrics():
     global intersection_count, task_cell_replan_count, path_replan_count, collision_prevention_count
     global last_task_cell, collision_event_counted_since_move
     global motor_time_ms, _motor_start_ms, busy_ms, mem_free_min
-    global candidate_filter_calls, candidate_filter_time_us_total, candidate_filter_time_us_max
-    global allocator_solve_time_us_total, allocator_time_us_total
-    global allocator_calls, allocator_time_us_max
     global topic_1_rec, topic_2_rec, topic_3_rec, topic_4_rec, topic_5_rec
     global topic_1_sent, topic_2_sent, topic_3_sent, topic_4_sent, topic_5_sent
     global bytes_sent, bytes_received, _metrics_logged, _metrics_cache
-    global metrics_frozen, metric_freeze_time_ms, terminal_target_step_counted
 
     intersection_count = 0
     task_cell_replan_count = 0
@@ -236,13 +178,6 @@ def reset_trial_metrics():
     _motor_start_ms = None
     busy_ms = 0
     mem_free_min = gc.mem_free()
-    candidate_filter_calls = 0
-    candidate_filter_time_us_total = 0
-    candidate_filter_time_us_max = 0
-    allocator_solve_time_us_total = 0
-    allocator_time_us_total = 0
-    allocator_calls = 0
-    allocator_time_us_max = 0
 
     topic_1_rec = 0
     topic_2_rec = 0
@@ -258,9 +193,6 @@ def reset_trial_metrics():
     bytes_received = 0
     _metrics_logged = False
     _metrics_cache = None
-    metrics_frozen = False
-    metric_freeze_time_ms = None
-    terminal_target_step_counted = False
 
 
 #message counters
@@ -307,26 +239,9 @@ def safe_assert(condition, message):
 
 def record_intersection(x, y):
     """Track this robot's completed intersection steps."""
-    if metrics_frozen:
-        return False
     safe_assert(0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE, "intersection out of range")
     global intersection_count
     intersection_count += 1
-    return True
-
-
-def freeze_trial_metrics(now_ticks=None):
-    """Freeze exported trial counters at the first target alert."""
-    global metrics_frozen, metric_freeze_time_ms, busy_ms
-    if metrics_frozen:
-        return False
-    if now_ticks is None:
-        now_ticks = time.ticks_ms()
-    finalize_motor_time(now_ticks)
-    busy_ms += busy_timer_value_ms()
-    metric_freeze_time_ms = now_ticks
-    metrics_frozen = True
-    return True
 
 
 def messaging_metrics():
@@ -358,21 +273,10 @@ def metrics_log():
     if _metrics_logged and _metrics_cache is not None:
         return _metrics_cache
     start = METRIC_START_TIME_MS if METRIC_START_TIME_MS is not None else BOOT_TIME_MS
-    now = metric_freeze_time_ms
-    if now is None:
-        now = time.ticks_ms()
-        finalize_motor_time(now)
+    now = time.ticks_ms()
+    finalize_motor_time(now)
     elapsed_ms = time.ticks_diff(now, start)
-    mean_step_time_ms = elapsed_ms / intersection_count if intersection_count > 0 else 0.0
-    candidate_filter_time_us_mean = (
-        candidate_filter_time_us_total / candidate_filter_calls
-        if candidate_filter_calls > 0 else 0.0
-    )
-    allocator_time_us_mean = allocator_time_us_total / allocator_calls if allocator_calls > 0 else 0.0
-    allocator_time_pct = (
-        allocator_time_us_total * 100.0 / (elapsed_ms * 1000)
-        if elapsed_ms > 0 else 0.0
-    )
+    compute_time_ms = max(0, elapsed_ms - motor_time_ms)
     mem_total = gc.mem_alloc() + gc.mem_free()
     mem_used_peak = mem_total - mem_free_min
     cpu_util_pct = (busy_ms * 100) // elapsed_ms if elapsed_ms > 0 else 0
@@ -383,15 +287,7 @@ def metrics_log():
     metrics = {
         "robot_id": ROBOT_ID,
         "target_location": metric_target_location,
-        "alg": ALGORITHM_NAME,
-        "top_k_rate": TOP_K_PERCENT,
-        "top_k_max_cells": TOP_K_MAX_CELLS,
-        "drop_rate": msg_drop_rate,
-        "config_sequence": applied_config_sequence,
-        "trial_mode": applied_trial_mode,
-        "commitment_horizon": applied_commitment_horizon,
-        "logic_revision": applied_logic_revision,
-        "scenario_sha256": applied_scenario_sha256,
+        "alg": 'DMCHBA',
         "steps": intersection_count,
         "msgs_sent": messaging['msgs_sent'],
         "msgs_received": messaging['msgs_received'],
@@ -408,21 +304,11 @@ def metrics_log():
         "bytes_sent": bytes_sent,
         "bytes_received": bytes_received,
         "motor_time_ms": motor_time_ms,
-        "trial_time_ms": elapsed_ms,
+        "compute_time_ms": compute_time_ms,
+        "busy_ms": busy_ms,
         "cpu_util_pct": cpu_util_pct,
         "mem_used_peak": mem_used_peak,
         "mem_free_min": mem_free_min,
-        "candidate_filter_calls": candidate_filter_calls,
-        "candidate_filter_time_us_total": candidate_filter_time_us_total,
-        "candidate_filter_time_us_mean": candidate_filter_time_us_mean,
-        "candidate_filter_time_us_max": candidate_filter_time_us_max,
-        "allocator_solve_time_us_total": allocator_solve_time_us_total,
-        "allocator_calls": allocator_calls,
-        "allocator_time_us_total": allocator_time_us_total,
-        "allocator_time_us_mean": allocator_time_us_mean,
-        "allocator_time_us_max": allocator_time_us_max,
-        "allocator_time_pct": allocator_time_pct,
-        "mean_step_time_ms": mean_step_time_ms,
         "task_cell_replans": task_cell_replan_count,
         "path_replans": path_replan_count,
         "collision_prevention_events": collision_prevention_count,
@@ -432,14 +318,6 @@ def metrics_log():
         "robot_id",
         "target_location",
         "alg",
-        "top_k_rate",
-        "top_k_max_cells",
-        "drop_rate",
-        "config_sequence",
-        "trial_mode",
-        "commitment_horizon",
-        "logic_revision",
-        "scenario_sha256",
         "steps",
         "msgs_sent",
         "msgs_received",
@@ -456,21 +334,11 @@ def metrics_log():
         "bytes_sent",
         "bytes_received",
         "motor_time_ms",
-        "trial_time_ms",
+        "compute_time_ms",
+        "busy_ms",
         "cpu_util_pct",
         "mem_used_peak",
         "mem_free_min",
-        "candidate_filter_calls",
-        "candidate_filter_time_us_total",
-        "candidate_filter_time_us_mean",
-        "candidate_filter_time_us_max",
-        "allocator_solve_time_us_total",
-        "allocator_calls",
-        "allocator_time_us_total",
-        "allocator_time_us_mean",
-        "allocator_time_us_max",
-        "allocator_time_pct",
-        "mean_step_time_ms",
         "task_cell_replans",
         "path_replans",
         "collision_prevention_events",
@@ -537,10 +405,7 @@ safe_assert(BAND_Y_MIN <= START_POS[1] <= BAND_Y_MAX,
             "start row must lie inside this robot's band")
 
 # UART0 for ESP32 communication (TX=GP28, RX=GP29)
-uart = UART(
-    0, baudrate=115200, tx=28, rx=29,
-    rxbuf=4096, txbuf=1024, timeout=1000, timeout_char=10,
-)
+uart = UART(0, baudrate=115200, tx=28, rx=29)
 
 # -----------------------------
 # Grid / Maps / Shared State
@@ -553,14 +418,13 @@ CELL_SEARCHED   = 2
 grid = bytearray(GRID_SIZE * GRID_SIZE)
 # target_p is the single search-value map. prob_map is kept as an alias-style
 # working array for A* compatibility and is always copied from target_p.
-prob_map = array('d', [1 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
+prob_map = array('f', [1 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
 REWARD_FACTOR = 5
 clues = []                            # list of (x, y) clue cells
 
 # --- Target belief map ---
 # P_target[i]: belief target is at cell i. There is no separate clue-value map.
-target_p = array('d', [1 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
-allocation_probability_normalizer = 1.0 / (GRID_SIZE * GRID_SIZE)
+target_p = array('f', [1 / (GRID_SIZE * GRID_SIZE)] * (GRID_SIZE * GRID_SIZE))
 
 # --- Decay exponent (tunable) ---
 # Higher exponent -> stronger / narrower target probability around clues.
@@ -573,7 +437,7 @@ TARGET_DECAY_EXP = 1.0   # target correlation around clues
 # arrays each planning cycle avoids repeated allocations, which are expensive
 # on MicroPython.
 came_from = array('i', [-1] * (GRID_SIZE * GRID_SIZE))
-cost_so_far = array('d', [0.0] * (GRID_SIZE * GRID_SIZE))
+cost_so_far = array('f', [0.0] * (GRID_SIZE * GRID_SIZE))
 frontier = []
 
 
@@ -605,15 +469,9 @@ def renorm(arr):
 
 def recompute_value_map():
     """Copy target_p into prob_map so target_p and prob_map stay identical."""
-    global allocation_probability_normalizer
     n = GRID_SIZE * GRID_SIZE
-    maximum = 0.0
     for i in range(n):
         prob_map[i] = target_p[i]
-        if target_p[i] > maximum:
-            maximum = target_p[i]
-    allocation_probability_normalizer = (
-        maximum if 0.0 < maximum < float("inf") else 1.0)
 
 
 pos = [START_POS[0], START_POS[1]]    # current grid position
@@ -631,98 +489,25 @@ move_forward_flag = False
 peer_intent = {}  # peer_id -> (x, y) next-step safety intent only
 peer_pos = {}     # peer_id -> (x, y) last reported position (post-drop)
 peer_pos_yield = {}  # peer_id -> (x, y) last reported position for collision checks
-published_clues = set()  # each locally detected or forwarded clue is sent once
-communicated_intent = None
 current_task_cell = None  # local internal task cell only; never published
 last_task_cell = None
 collision_event_counted_since_move = False
-blocked_goal_cell = None
-blocked_goal_conflicts = 0
-temporary_invalid_task_until = {}
-pending_collision_reallocation = False
 
 # -----------------------------
 # DMCHBA allocator state
 # -----------------------------
-# Hardware note: the simulator-style Top-K prefilter bounds the task set before
-# robots are cloned and the Hungarian assignment matrix is built.
-DMCHBA_COMMITMENT_HORIZON = COMMITMENT_HORIZON
-DMCHBA_PSEUDOTASK_COST = 1.0e9
-DMCHBA_TIE_EPS = EPS
+# Hardware note:
+# The simulator DMCHBA evaluates every valid unsearched cell, clones every
+# known robot enough times to cover that task set, and runs a Hungarian solve.
+# On a 19x19 grid that can create a ~361x361 assignment problem. The metric
+# hub's Top-K setting supplies the task cap.
+DMCHBA_COMMITMENT_HORIZON = 3
+DMCHBA_PSEUDOTASK_COST = 1000000000
+DMCHBA_COST_SCALE = 100000
+DMCHBA_TIE_EPS = 0.000001
 dmchba_path = []
 dmchba_clue_signature = None
 dmchba_last_assignment_signature = None
-
-# Fixed allocator workspaces.  The logical Hungarian matrix is never
-# materialized.  Instead, a small agent-by-task base-cost table is expanded
-# virtually when the solver requests a clone-row/task-column cost.
-DMCHBA_MAX_MATRIX_N = TOP_K_MAX_CELLS + NUM_ROBOTS - 1
-DMCHBA_HUNGARIAN_INF = float("inf")
-dmchba_candidate_ids = array('H', [0] * TOP_K_MAX_CELLS)
-dmchba_agent_task_costs = [
-    array('d', [0.0] * TOP_K_MAX_CELLS) for _ in range(NUM_ROBOTS)
-]
-dmchba_h_u = array('d', [0.0] * (DMCHBA_MAX_MATRIX_N + 1))
-dmchba_h_v = array('d', [0.0] * (DMCHBA_MAX_MATRIX_N + 1))
-dmchba_h_minv = array('d', [0.0] * (DMCHBA_MAX_MATRIX_N + 1))
-dmchba_h_p = array('H', [0] * (DMCHBA_MAX_MATRIX_N + 1))
-dmchba_h_way = array('H', [0] * (DMCHBA_MAX_MATRIX_N + 1))
-dmchba_h_used = bytearray(DMCHBA_MAX_MATRIX_N + 1)
-dmchba_h_assignment = array('h', [-1] * DMCHBA_MAX_MATRIX_N)
-dmchba_assigned_ids = array('H', [0] * TOP_K_MAX_CELLS)
-
-
-def _apply_top_k_capacity(capacity):
-    global DMCHBA_MAX_MATRIX_N
-    global dmchba_candidate_ids, dmchba_agent_task_costs
-    global dmchba_h_u, dmchba_h_v, dmchba_h_minv
-    global dmchba_h_p, dmchba_h_way, dmchba_h_used
-    global dmchba_h_assignment, dmchba_assigned_ids
-
-    matrix_n = capacity + NUM_ROBOTS - 1
-    if (
-        dmchba_candidate_ids is not None
-        and len(dmchba_candidate_ids) == capacity
-        and DMCHBA_MAX_MATRIX_N == matrix_n
-    ):
-        return
-
-    dmchba_candidate_ids = None
-    dmchba_agent_task_costs = None
-    dmchba_h_u = None
-    dmchba_h_v = None
-    dmchba_h_minv = None
-    dmchba_h_p = None
-    dmchba_h_way = None
-    dmchba_h_used = None
-    dmchba_h_assignment = None
-    dmchba_assigned_ids = None
-    gc.collect()
-
-    candidate_ids = array('H', [0] * capacity)
-    agent_task_costs = [
-        array('d', [0.0] * capacity) for _ in range(NUM_ROBOTS)
-    ]
-    h_u = array('d', [0.0] * (matrix_n + 1))
-    h_v = array('d', [0.0] * (matrix_n + 1))
-    h_minv = array('d', [0.0] * (matrix_n + 1))
-    h_p = array('H', [0] * (matrix_n + 1))
-    h_way = array('H', [0] * (matrix_n + 1))
-    h_used = bytearray(matrix_n + 1)
-    h_assignment = array('h', [-1] * matrix_n)
-    assigned_ids = array('H', [0] * capacity)
-
-    DMCHBA_MAX_MATRIX_N = matrix_n
-    dmchba_candidate_ids = candidate_ids
-    dmchba_agent_task_costs = agent_task_costs
-    dmchba_h_u = h_u
-    dmchba_h_v = h_v
-    dmchba_h_minv = h_minv
-    dmchba_h_p = h_p
-    dmchba_h_way = h_way
-    dmchba_h_used = h_used
-    dmchba_h_assignment = h_assignment
-    dmchba_assigned_ids = assigned_ids
 
 
 TURN_COST = 0.3
@@ -750,21 +535,21 @@ class MotionConfig:
 cfg = MotionConfig()
 
 #UART handling globals
+# ---------- ring buffer ----------
+RB_SIZE = 1024
+buf = bytearray(RB_SIZE)
+head = 0
+tail = 0
 DELIM = ord('-')
 
-# ---------- bounded streaming frame parser ----------
+# ---------- message builder ----------
 MSG_BUF_SIZE = 256
 msg_buf = bytearray(MSG_BUF_SIZE)
 msg_len = 0
-rx_discarding_oversize = False
 
-# ---------- serialized outbound framing ----------
-TX_BUF_SIZE = 256
+# ---------- outbound buffer ----------
+TX_BUF_SIZE = 64
 tx_buf = bytearray(TX_BUF_SIZE)
-tx_view = memoryview(tx_buf)
-uart_tx_lock = _thread.allocate_lock()
-UART_WRITE_DEADLINE_MS = 1500
-uart_tx_failed = False
 
 def _msg_buf_ascii(length):
     """Convert buffered UART protocol bytes to ASCII without UTF-8 decoding."""
@@ -865,7 +650,7 @@ def set_speeds(left, right):
     """Wrapper to track motor active time before delegating to hardware."""
     global _motor_start_ms
     if left != 0 or right != 0:
-        if not metrics_frozen and _motor_start_ms is None:
+        if _motor_start_ms is None:
             _motor_start_ms = time.ticks_ms()
     else:
         finalize_motor_time()
@@ -886,7 +671,6 @@ def stop_all():
     global running, move_forward_flag
     running = False
     move_forward_flag = False
-    publish_intent()
     motors_off()
 
 def stop_and_alert_target():
@@ -901,37 +685,18 @@ def stop_and_alert_target():
     the current heading direction so external consumers know where it is.
     """
     global target_location, found_target, move_forward_flag, target_bump_stop
-    global terminal_target_step_counted
-    detected_at_ms = time.ticks_ms()
     next_x = pos[0] + heading[0]
     next_y = pos[1] + heading[1]
-    if target_bump_stop:
-        return
     target_location = (next_x, next_y)
     target_bump_stop = True
-    if (
-        trial_active and not metrics_frozen
-        and 0 <= next_x < GRID_SIZE and 0 <= next_y < GRID_SIZE
-    ):
-        record_intersection(next_x, next_y)
-        grid[idx(next_x, next_y)] = CELL_SEARCHED
-        terminal_target_step_counted = True
-    # Stop timing at the bump instant, but include the terminal protected
-    # messages in the frozen communication counters.
-    finalize_motor_time(detected_at_ms)
-    motors_off()
-    found_target = True
-    move_forward_flag = False
-    try:
-        publish_target(next_x, next_y)
-    finally:
-        freeze_trial_metrics(detected_at_ms)
-        motors_off()
+    publish_target(next_x, next_y)
     buzz('target')
+    move_forward_flag = False
+    motors_off()
     flash_LEDS(BLUE, 1)
 # ===========================================================
 # UART Messaging
-# Format: "<topic#>.<payload>-"
+# Format: "<topic#>:<payload>\n"
 # position/state = 1, next-step intent = 2, clue = 4, target/alert = 5,
 # syncstate (not used in this code) = 6, hub command = 7
 #
@@ -942,195 +707,95 @@ def stop_and_alert_target():
 #   002.7,8-  robot 00 next-step intent at (7,8)
 #   004.5,2-  robot 00 clue at (5,2)
 # ===========================================================
-def _uart_write_all_locked(frame_len):
-    """Write one frame completely while ``uart_tx_lock`` is held."""
-    global uart_tx_failed
-    offset = 0
-    deadline = time.ticks_add(time.ticks_ms(), UART_WRITE_DEADLINE_MS)
-    try:
-        while offset < frame_len:
-            if time.ticks_diff(time.ticks_ms(), deadline) >= 0:
-                raise OSError(
-                    "UART write timeout ({}/{})".format(offset, frame_len)
-                )
-            written = uart.write(tx_view[offset:frame_len])
-            if written is None or written == 0:
-                time.sleep_ms(1)
-                continue
-            if written < 0 or written > frame_len - offset:
-                raise OSError("UART write returned invalid length")
-            offset += written
-    except Exception:
-        uart_tx_failed = True
-        raise
-    return frame_len
-
-
 def uart_send(topic, payload_len):
-    """Finish and write the prepared shared-buffer frame with the TX lock held."""
+    """Send the prepared message in tx_buf with topic and payload_len."""
     global bytes_sent
-    frame_len = payload_len + 3
-    if len(topic) != 1 or frame_len > TX_BUF_SIZE:
-        raise ValueError("invalid UART frame")
-    for index in range(2, payload_len + 2):
-        if tx_buf[index] == DELIM:
-            raise ValueError("UART payload contains frame delimiter")
     tx_buf[0] = ord(topic)
     tx_buf[1] = ord('.')
-    tx_buf[payload_len + 2] = DELIM
-    _uart_write_all_locked(frame_len)
-    if not metrics_frozen:
-        bytes_sent += frame_len
-    return frame_len
+    tx_buf[payload_len + 2] = ord('-')
+    uart.write(tx_buf[:payload_len + 3])
+    bytes_sent += payload_len + 3
 
 
-def _uart_send_text(topic, payload, count_bytes=True):
-    """Build and write one text frame atomically using the shared TX buffer."""
-    global bytes_sent
-    payload = str(payload)
-    frame_len = len(payload) + 3
-    if len(topic) != 1 or frame_len > TX_BUF_SIZE or "-" in payload:
-        raise ValueError("invalid UART frame")
-    uart_tx_lock.acquire()
-    try:
-        tx_buf[0] = ord(topic)
-        tx_buf[1] = ord('.')
-        for index in range(len(payload)):
-            code = ord(payload[index])
-            if code < 32 or code > 126:
-                raise ValueError("UART payload must be printable ASCII")
-            tx_buf[index + 2] = code
-        tx_buf[frame_len - 1] = DELIM
-        _uart_write_all_locked(frame_len)
-    finally:
-        uart_tx_lock.release()
-    if count_bytes and not metrics_frozen:
-        bytes_sent += frame_len
-    return frame_len
-
-def publish_position():
-    """Publish current pose (for UI/diagnostics)."""
-    global topic_1_sent
-    uart_tx_lock.acquire()
-    try:
-        i = 2
-        i = _write_int(tx_buf, i, pos[0])
-        tx_buf[i] = ord(','); i += 1
-        i = _write_int(tx_buf, i, pos[1])
-        uart_send('1', i - 2)
-    finally:
-        uart_tx_lock.release()
-    if _trial_traffic_enabled() and not metrics_frozen:
-        topic_1_sent += 1
-
-def publish_clue(x, y):
-    """Publish a clue at (x,y)."""
-    global topic_4_sent
-    clue = (int(x), int(y))
-    if clue in published_clues:
-        return False
-    uart_tx_lock.acquire()
-    try:
-        i = 2
-        i = _write_int(tx_buf, i, x)
-        tx_buf[i] = ord(','); i += 1
-        i = _write_int(tx_buf, i, y)
-        uart_send('4', i - 2)
-    finally:
-        uart_tx_lock.release()
-    published_clues.add(clue)
-    if not metrics_frozen:
-        topic_4_sent += 1
-    return True
-
-def publish_target(x, y):
-    """Publish that we found the target at (x,y)."""
-    global topic_5_sent
-    uart_tx_lock.acquire()
-    try:
-        i = 2
-        i = _write_int(tx_buf, i, x)
-        tx_buf[i] = ord(','); i += 1
-        i = _write_int(tx_buf, i, y)
-        uart_send('5', i - 2)
-    finally:
-        uart_tx_lock.release()
-    if not metrics_frozen:
-        topic_5_sent += 1
-
-def publish_intent(x=None, y=None):
-    """
-    Publish our intended next cell for low-level collision avoidance only.
-    This is not an allocator task claim or task-cell reservation.
-    """
-    global topic_2_sent, communicated_intent
-    intent = None if x is None or y is None else (int(x), int(y))
-    current_cell = (int(pos[0]), int(pos[1]))
-    intent_signature = (current_cell, intent)
-    if intent_signature == communicated_intent:
-        return False
-    uart_tx_lock.acquire()
-    try:
-        i = 2
-        i = _write_int(tx_buf, i, current_cell[0])
-        tx_buf[i] = ord(','); i += 1
-        i = _write_int(tx_buf, i, current_cell[1])
-        tx_buf[i] = ord(','); i += 1
-        if intent is None:
-            tx_buf[i] = ord('X'); i += 1
-            tx_buf[i] = ord(','); i += 1
-            tx_buf[i] = ord('X'); i += 1
-        else:
-            i = _write_int(tx_buf, i, intent[0])
-            tx_buf[i] = ord(','); i += 1
-            i = _write_int(tx_buf, i, intent[1])
-        uart_send('2', i - 2)
-    finally:
-        uart_tx_lock.release()
-    if not metrics_frozen:
-        topic_2_sent += 1
-    communicated_intent = intent_signature
-    return True
+def _send_hub_ack(payload):
+    uart.write("6." + payload + "-")
 
 
-def _valid_scenario_sha256(value):
+def _valid_config_hash(value):
     return (
         len(value) == 64
-        and all(character in "0123456789abcdef" for character in value)
+        and value == value.lower()
+        and all(ch in "0123456789abcdef" for ch in value)
     )
 
 
-def _send_config_ack(
+def _handle_hub_config(payload):
+    global applied_config_sequence, applied_config_request
+    global applied_top_k_ppm, TOP_K_MAX_CELLS
+    global control_state, msg_drop_rate
+    try:
+        fields = payload.strip().split(",")
+        if len(fields) != 9 or fields[0] != "CFG":
+            return False
+        sequence = int(fields[1])
+        top_k_ppm = int(fields[2])
+        top_k_cells = int(fields[3])
+        drop_ppm = int(fields[4])
+        trial_mode = fields[5]
+        horizon = int(fields[6])
+        logic_revision = fields[7]
+        scenario_hash = fields[8]
+    except (ValueError, IndexError):
+        return False
+    request = (
         sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
-        horizon, logic_revision, scenario_sha256, status):
-    payload = "CFGACK,{},{},{},{},{},{},{},{},{},{}".format(
-        sequence, ALGORITHM_NAME, top_k_ppm, top_k_cells, drop_ppm,
-        trial_mode, horizon, logic_revision, scenario_sha256, status)
-    _uart_send_text("6", payload, False)
+        horizon, logic_revision, scenario_hash,
+    )
+    expected_cells = max(
+        1,
+        (FULL_MAP_CELLS * top_k_ppm + CONFIG_RATE_SCALE // 2)
+        // CONFIG_RATE_SCALE,
+    )
+    valid = (
+        sequence > 0
+        and 0 < top_k_ppm <= CONFIG_RATE_SCALE
+        and top_k_cells == expected_cells
+        and 0 <= drop_ppm <= CONFIG_RATE_SCALE
+        and trial_mode == TRIAL_MODE
+        and horizon == COMMITMENT_HORIZON
+        and logic_revision == LOGIC_REVISION
+        and _valid_config_hash(scenario_hash)
+    )
+    if request == applied_config_request:
+        status = "OK"
+    elif (
+        not valid
+        or sequence <= applied_config_sequence
+        or trial_active
+        or start_signal
+        or returning_home
+    ):
+        status = "INVALID"
+    else:
+        applied_config_sequence = sequence
+        applied_config_request = request
+        applied_top_k_ppm = top_k_ppm
+        TOP_K_MAX_CELLS = top_k_cells
+        msg_drop_rate = drop_ppm / CONFIG_RATE_SCALE
+        control_state = "CONFIGURED"
+        status = "OK"
+    _send_hub_ack(
+        "CFGACK,{},{},{},{},{},{},{},{},{},{}".format(
+            sequence, ALGORITHM_NAME, top_k_ppm, top_k_cells, drop_ppm,
+            trial_mode, horizon, logic_revision, scenario_hash, status,
+        )
+    )
+    return True
 
 
-def _send_command_ack(sequence, state):
-    payload = "CMDACK,{},{},{}".format(sequence, ROBOT_ID, state)
-    _uart_send_text("6", payload, False)
-
-
-def _trial_traffic_enabled():
-    return start_signal or control_state == "STARTED"
-
-
-def _clear_start_transport_caches():
-    global communicated_intent
-    peer_pos.clear()
-    peer_pos_yield.clear()
-    peer_intent.clear()
-    communicated_intent = None
-
-
-def _handle_control_command(payload):
-    """Apply one sequence-tagged PRESTART/START/RUN/ABORT transition."""
+def _handle_hub_command(payload):
     global control_state, pre_start_signal, start_signal
-    global found_target, move_forward_flag, abort_signal
-    global METRIC_START_TIME_MS, trial_active
+    global found_target, move_forward_flag
     try:
         fields = payload.strip().split(",")
         if len(fields) != 3 or fields[0] != "CMD":
@@ -1139,7 +804,7 @@ def _handle_control_command(payload):
         sequence = int(fields[2])
     except (ValueError, IndexError):
         return False
-    if sequence <= 0 or sequence != applied_config_sequence:
+    if sequence != applied_config_sequence or sequence <= 0:
         return False
     if command == "PRESTART":
         if control_state == "CONFIGURED":
@@ -1147,148 +812,82 @@ def _handle_control_command(payload):
             control_state = "READY"
         elif control_state != "READY":
             return False
-        _send_command_ack(sequence, "READY")
-        return True
-    if command == "START":
+        state = "READY"
+    elif command == "START":
         if control_state == "READY":
-            _clear_start_transport_caches()
-            reset_trial_metrics()
-            start_signal = False
+            peer_pos.clear()
+            peer_pos_yield.clear()
+            peer_intent.clear()
             control_state = "STARTED"
         elif control_state not in ("STARTED", "RUNNING"):
             return False
-        _send_command_ack(sequence, "STARTED")
-        return True
-    if command == "RUN":
+        state = "STARTED"
+    elif command == "RUN":
         if control_state == "STARTED":
-            if found_target:
-                abort_signal = True
-                control_state = "ABORTED"
-                _send_command_ack(sequence, "ABORTED")
-                return True
-            METRIC_START_TIME_MS = time.ticks_ms()
-            trial_active = True
             start_signal = True
             control_state = "RUNNING"
         elif control_state != "RUNNING":
             return False
-        _send_command_ack(sequence, "RUNNING")
-        return True
-    if command == "ABORT":
-        if control_state not in (
-            "CONFIGURED", "READY", "STARTED", "RUNNING", "ABORTED"
-        ):
-            return False
-        if control_state != "ABORTED":
-            abort_signal = True
-            pre_start_signal = False
+        state = "RUNNING"
+    elif command == "ABORT":
+        pre_start_signal = False
+        if trial_active or start_signal:
+            found_target = True
             start_signal = False
             move_forward_flag = False
-            if trial_active:
-                found_target = True
-                freeze_trial_metrics()
-            control_state = "ABORTED"
-        _send_command_ack(sequence, "ABORTED")
-        return True
-    return False
-
-
-def _handle_config_command(payload):
-    global TOP_K_PERCENT, TOP_K_MAX_CELLS, msg_drop_rate
-    global applied_config_sequence, applied_top_k_ppm, applied_drop_ppm
-    global applied_trial_mode, applied_commitment_horizon
-    global applied_logic_revision, applied_scenario_sha256
-    global last_config_request, last_config_status
-    global control_state
-
-    sequence = 0
-    top_k_ppm = 0
-    top_k_cells = 0
-    drop_ppm = 0
-    trial_mode = TRIAL_MODE
-    horizon = COMMITMENT_HORIZON
-    logic_revision = LOGIC_REVISION
-    scenario_sha256 = "0" * 64
-    try:
-        fields = payload.strip().split(",")
-        if len(fields) != 9 or fields[0] != "CFG":
-            raise ValueError
-        sequence = int(fields[1])
-        top_k_ppm = int(fields[2])
-        top_k_cells = int(fields[3])
-        drop_ppm = int(fields[4])
-        trial_mode = fields[5].strip()
-        horizon = int(fields[6])
-        logic_revision = fields[7].strip()
-        scenario_sha256 = fields[8].strip().lower()
-    except (ValueError, IndexError):
-        _send_config_ack(
-            sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
-            horizon, logic_revision, scenario_sha256, "INVALID")
-        return
-
-    request = (
-        sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
-        horizon, logic_revision, scenario_sha256)
-    if request == last_config_request:
-        _send_config_ack(
-            sequence, top_k_ppm, top_k_cells, drop_ppm,
-            trial_mode, horizon, logic_revision, scenario_sha256,
-            last_config_status)
-        return
-    applied_request = (
-        applied_config_sequence, applied_top_k_ppm, TOP_K_MAX_CELLS,
-        applied_drop_ppm, applied_trial_mode,
-        applied_commitment_horizon, applied_logic_revision,
-        applied_scenario_sha256)
-    if request == applied_request:
-        last_config_request = request
-        last_config_status = "OK"
-        _send_config_ack(
-            sequence, top_k_ppm, top_k_cells, drop_ppm,
-            trial_mode, horizon, logic_revision, scenario_sha256, "OK")
-        return
-
-    expected_cells = max(
-        1,
-        (GRID_SIZE * GRID_SIZE * top_k_ppm
-         + CONFIG_RATE_SCALE // 2) // CONFIG_RATE_SCALE,
-    )
-    status = "OK"
-    if (
-        trial_active or start_signal or pre_start_signal or returning_home
-        or sequence <= applied_config_sequence
-        or not (0 < top_k_ppm <= CONFIG_RATE_SCALE)
-        or not (0 <= drop_ppm <= CONFIG_RATE_SCALE)
-        or top_k_cells != expected_cells
-        or trial_mode != TRIAL_MODE
-        or horizon != COMMITMENT_HORIZON
-        or logic_revision != LOGIC_REVISION
-        or not _valid_scenario_sha256(scenario_sha256)
-    ):
-        status = "INVALID"
+            motors_off()
+        control_state = "ABORTED"
+        state = "ABORTED"
     else:
-        try:
-            _apply_top_k_capacity(top_k_cells)
-            TOP_K_PERCENT = top_k_ppm / CONFIG_RATE_SCALE
-            TOP_K_MAX_CELLS = top_k_cells
-            msg_drop_rate = drop_ppm / CONFIG_RATE_SCALE
-            applied_config_sequence = sequence
-            applied_top_k_ppm = top_k_ppm
-            applied_drop_ppm = drop_ppm
-            applied_trial_mode = trial_mode
-            applied_commitment_horizon = horizon
-            applied_logic_revision = logic_revision
-            applied_scenario_sha256 = scenario_sha256
-            control_state = "CONFIGURED"
-        except MemoryError:
-            status = "MEMORY_ERROR"
+        return False
+    _send_hub_ack("CMDACK,{},{},{}".format(sequence, ROBOT_ID, state))
+    return True
 
-    last_config_request = request
-    last_config_status = status
-    _send_config_ack(
-        sequence, top_k_ppm, top_k_cells, drop_ppm, trial_mode,
-        horizon, logic_revision, scenario_sha256, status)
+
+def publish_position():
+    """Publish current pose (for UI/diagnostics)."""
+    global topic_1_sent
+    if start_signal:
+        topic_1_sent += 1
+    i = 2
+    i = _write_int(tx_buf, i, pos[0])
+    tx_buf[i] = ord(','); i += 1
+    i = _write_int(tx_buf, i, pos[1])
+    uart_send('1', i - 2)
+
+def publish_clue(x, y):
+    """Publish a clue at (x,y)."""
+    global topic_4_sent
+    topic_4_sent += 1
+    i = 2
+    i = _write_int(tx_buf, i, x)
+    tx_buf[i] = ord(','); i += 1
+    i = _write_int(tx_buf, i, y)
+    uart_send('4', i - 2)
+
+def publish_target(x, y):
+    """Publish that we found the target at (x,y)."""
+    global topic_5_sent, found_target
+    topic_5_sent += 1
+    i = 2
+    i = _write_int(tx_buf, i, x)
+    tx_buf[i] = ord(','); i += 1
+    i = _write_int(tx_buf, i, y)
+    uart_send('5', i - 2)
+    found_target = True
+
+def publish_intent(x, y):
+    """
+    Publish our intended next cell for low-level collision avoidance only.
+    This is not an allocator task claim or task-cell reservation.
+    """
+    global topic_2_sent
+    topic_2_sent += 1
+    i = 2
+    i = _write_int(tx_buf, i, x)
+    tx_buf[i] = ord(','); i += 1
+    i = _write_int(tx_buf, i, y)
+    uart_send('2', i - 2)
 
 
 def handle_msg(line):
@@ -1305,11 +904,9 @@ def handle_msg(line):
     Ignores:
       - other status fields we don't currently need
     """
-    global pre_start_signal, peer_intent, peer_pos, current_task_cell
-    global first_clue_seen, target_location, start_signal, found_target
-    global move_forward_flag, communicated_intent
+    global pre_start_signal, peer_intent, peer_pos, current_task_cell, first_clue_seen, target_location, start_signal, found_target, move_forward_flag
 
-    # Minimal parsing: "<sender><topic>.<payload>"
+    # Minimal parsing: "<sender>/<topic>:<payload>"
     try:
         left, payload = line.split(".", 1)
         if len(left) < 3:
@@ -1317,8 +914,6 @@ def handle_msg(line):
         sender = left[0:2]
         topic  = left[2]
     except ValueError:
-        return
-    if sender == ROBOT_ID:
         return
 
     if topic == "1": #position
@@ -1329,50 +924,41 @@ def handle_msg(line):
             return
         if not (0 <= ox < GRID_SIZE and 0 <= oy < GRID_SIZE):
             return
-        # Topic-1 frames are also used as pre-trial home/readiness beacons.
-        # Keep return-home routing current, but command 2 is the boundary at
-        # which a delivered position becomes a canonical search observation.
-        if not _trial_traffic_enabled():
-            if returning_home:
-                peer_pos[sender] = (ox, oy)
-            return
-        if random.random() < msg_drop_rate:
+        # Track pre-drop positions for last-minute yield checks only.
+        peer_pos_yield[sender] = (ox, oy)
+        if random.random() <= msg_drop_rate and start_signal:
             return  # simulate message drop
-        if not metrics_frozen:
+        if start_signal:
             topic_1_rec += 1
+        prev = peer_pos.get(sender)
+        if prev and prev != (ox, oy):
+            px, py = prev
+            if 0 <= px < GRID_SIZE and 0 <= py < GRID_SIZE:
+                i_prev = idx(px, py)
+                grid[i_prev] = CELL_SEARCHED
+                # Peer searched this cell and did not report a clue/target
+                update_target_on_miss(i_prev)
+                if current_task_cell == (px, py) and not (pos[0] == px and pos[1] == py):
+                    current_task_cell = None
         peer_pos[sender] = (ox, oy)
-        current_index = idx(ox, oy)
-        if grid[current_index] != CELL_SEARCHED:
-            grid[current_index] = CELL_SEARCHED
-            update_target_on_miss(current_index)
-        if current_task_cell == (ox, oy) and (pos[0], pos[1]) != (ox, oy):
-            current_task_cell = None
+        grid[idx(ox, oy)] = CELL_SEARCHED
 
     elif topic == "2": #intent
         global topic_2_rec
-        if not metrics_frozen:
-            topic_2_rec += 1
-        fields = payload.split(",")
-        if len(fields) != 4:
-            return
+        topic_2_rec += 1
         try:
-            px = int(fields[0])
-            py = int(fields[1])
+            ix, iy = map(int, payload.split(","))
         except ValueError:
             return
-        if not (0 <= px < GRID_SIZE and 0 <= py < GRID_SIZE):
+        if not (0 <= ix < GRID_SIZE and 0 <= iy < GRID_SIZE):
             return
-        peer_pos_yield[sender] = (px, py)
-        if fields[2] == "X" and fields[3] == "X":
-            peer_intent.pop(sender, None)
-            return
-        try:
-            ix = int(fields[2])
-            iy = int(fields[3])
-        except ValueError:
-            return
-        if 0 <= ix < GRID_SIZE and 0 <= iy < GRID_SIZE:
-            peer_intent[sender] = (ix, iy)
+        prev = peer_intent.get(sender)
+        if prev and prev != (ix, iy):
+            px, py = prev
+            if 0 <= px < GRID_SIZE and 0 <= py < GRID_SIZE:
+                if peer_pos.get(sender) != (px, py):
+                    grid[idx(px, py)] = CELL_SEARCHED
+        peer_intent[sender] = (ix, iy)
 
     elif topic == "3": # deprecated task-cell/current-task message
         # DMCHBA does not use communicated task cells or task reservations.
@@ -1380,13 +966,10 @@ def handle_msg(line):
         return
 
     elif topic == "4":   #clue
-        if not _trial_traffic_enabled():
-            return
-        if random.random() < msg_drop_rate:
+        if random.random() <= msg_drop_rate:
             return  # simulate message drop
         global topic_4_rec
-        if not metrics_frozen:
-            topic_4_rec += 1
+        topic_4_rec += 1
         try:
             x, y = map(int, payload.split(","))
         except ValueError:
@@ -1399,77 +982,75 @@ def handle_msg(line):
                 i = idx(clue[0], clue[1])
                 grid[i] = CELL_SEARCHED
                 update_prob_map()
-                publish_clue(x, y)
                 gc.collect()
 
     elif topic == "5": #target
         # Peer found the target: finish this trial without killing the program.
-        if not _trial_traffic_enabled():
-            return
         global topic_5_rec
-        if not metrics_frozen:
-            topic_5_rec += 1
+        topic_5_rec += 1
         try:
             x, y = map(int, payload.split(","))
             target_location = (x, y)
         except ValueError:
             target_location = None
-        if not returning_home:
+        if trial_active and not returning_home:
+            # Finish any cell already in progress, then end the trial.
             found_target = True
-            move_forward_flag = False
-            if trial_active:
-                freeze_trial_metrics()
 
     elif topic == "7":  # hub command
-        if payload.strip().startswith("CFG,"):
-            _handle_config_command(payload)
-        elif payload.strip().startswith("CMD,"):
-            _handle_control_command(payload)
+        if _handle_hub_config(payload) or _handle_hub_command(payload):
+            return
+        if payload.strip() == "1":
+            pre_start_signal = True
+        elif payload.strip() == "2":
+            start_signal = True
+        elif payload.strip() == "3":
+            found_target = True
+            move_forward_flag = False
+            motors_off()
 
-def _rx_feed_bytes(data):
-    """Parse an arbitrary UART chunk without a lossy downstream ring."""
-    global msg_len, rx_discarding_oversize, bytes_received
-    completed = 0
-    for b in data:
-        if b == DELIM:
-            if rx_discarding_oversize:
-                rx_discarding_oversize = False
-                msg_len = 0
-                continue
-            if msg_len:
-                frame = _msg_buf_ascii(msg_len)
-                msg_len = 0
-                if frame:
-                    left = frame.split(".", 1)[0]
-                    if (
-                        _trial_traffic_enabled() and not metrics_frozen
-                        and len(left) >= 3 and left[2] in "12345"
-                    ):
-                        bytes_received += len(frame) + 1
-                    handle_msg(frame)
-                    completed += 1
-            continue
-        if rx_discarding_oversize:
-            continue
+# ---------- ring buffer helpers ----------
+def rb_put_byte(b):
+    """Push one byte into the ring buffer."""
+    global tail, head
+    buf[tail] = b
+    nxt = (tail + 1) % RB_SIZE
+    if nxt == head:                # buffer full, drop oldest
+        head = (head + 1) % RB_SIZE
+    tail = nxt
+
+def rb_pull_into_msg():
+    """Pull bytes into message buffer until '-' is found."""
+    global head, tail, msg_len
+    if head == tail:
+        return None
+    while head != tail:
+        b = buf[head]
+        head = (head + 1) % RB_SIZE
+        if b == DELIM:  # complete frame
+            s = _msg_buf_ascii(msg_len)
+            msg_len = 0
+            return s
         if msg_len < MSG_BUF_SIZE:
             msg_buf[msg_len] = b
             msg_len += 1
-        else:
-            msg_len = 0
-            rx_discarding_oversize = True
-    return completed
+    return None
 
 # ---------- UART service ----------
 def uart_service():
     """Read and parse any complete messages from UART."""
+    global bytes_received
+    data = uart.read()     # returns None or bytes target
+    if not data:
+        return
+    bytes_received += len(data)
+    for b in data:         # iterate over bytes
+        rb_put_byte(b)
     while True:
-        available = uart.any()
-        if not available:
-            return
-        data = uart.read(min(available, 256))
-        if not data:
-            return
-        _rx_feed_bytes(data)
+        msg = rb_pull_into_msg()
+        if msg is None:
+            break
+        handle_msg(msg)
 
 # ===========================================================
 # Sensing & Motion
@@ -1588,6 +1169,7 @@ def calibrate():
         grid[idx(pos[0], pos[1])] = CELL_SEARCHED
         update_target_on_miss(idx(pos[0], pos[1]))  # start cell is a searched/target-miss cell
     update_prob_map()
+    publish_position()
 
     motors_off()
     gc.collect()
@@ -1617,10 +1199,10 @@ def check_current_cell_for_clue(stage="start"):
         if is_new:
             clues.append(clue)
         first_clue_seen = True
+        publish_clue(pos[0], pos[1])
         if is_new:
             update_prob_map()
             gc.collect()
-        publish_clue(pos[0], pos[1])
 
 # ===========================================================
 # Heading / Turning (cardinal NSEW)
@@ -1726,23 +1308,6 @@ def update_prob_map():
                 target_p[i] = s
         renorm(target_p)
 
-    else:
-        # With no clue evidence, the exact posterior is uniform over every
-        # cell that has not yet been searched.
-        open_count = 0
-        for i in range(GRID_SIZE * GRID_SIZE):
-            if grid[i] == CELL_SEARCHED:
-                target_p[i] = 0.0
-            else:
-                open_count += 1
-        if open_count > 0:
-            val = 1.0 / open_count
-            for i in range(GRID_SIZE * GRID_SIZE):
-                if grid[i] != CELL_SEARCHED:
-                    target_p[i] = val
-        else:
-            renorm(target_p)
-
     # Whether or not we have clues, recompute the unified value map
     recompute_value_map()
 
@@ -1752,10 +1317,11 @@ def update_target_on_miss(i):
     We have effectively searched cell i for the target (POD_target = 1)
     and did NOT find it. Set P_target(i) = 0 and renormalize.
     """
-    # BeliefMap parity recomputes the complete posterior after every miss.
-    # Repeated in-place renormalization is mathematically close but can drift
-    # enough to change EPS-governed allocator ties.
-    update_prob_map()
+    if target_p[i] <= 0.0:
+        return
+    target_p[i] = 0.0
+    renorm(target_p)
+    recompute_value_map()
 
 
 def i_should_yield(ix, iy):
@@ -1768,43 +1334,6 @@ def i_should_yield(ix, iy):
         if (px, py) == (ix, iy):
             return True
     return False
-
-
-def _expire_temporary_invalid_tasks():
-    now = time.ticks_ms()
-    for cell, expires_at in list(temporary_invalid_task_until.items()):
-        if time.ticks_diff(now, expires_at) >= 0:
-            temporary_invalid_task_until.pop(cell, None)
-
-
-def _task_temporarily_invalid(cell):
-    expires_at = temporary_invalid_task_until.get(cell)
-    if expires_at is None:
-        return False
-    if time.ticks_diff(time.ticks_ms(), expires_at) >= 0:
-        temporary_invalid_task_until.pop(cell, None)
-        return False
-    return True
-
-
-def _register_goal_conflict(cell):
-    """Return the consecutive protected-step conflict count for this goal."""
-    global blocked_goal_cell, blocked_goal_conflicts
-    if blocked_goal_cell == cell:
-        blocked_goal_conflicts += 1
-    else:
-        blocked_goal_cell = cell
-        blocked_goal_conflicts = 1
-    return blocked_goal_conflicts
-
-
-def _temporarily_invalidate_task(cell, backoff_ms, now_ms=None):
-    """Keep a twice-blocked goal out of allocation through its backoff."""
-    if now_ms is None:
-        now_ms = time.ticks_ms()
-    temporary_invalid_task_until[cell] = time.ticks_add(
-        now_ms, max(int(backoff_ms), 1))
-    return now_ms
 
 def _rid_sort_key(rid):
     """Deterministic robot ID ordering, numeric when possible."""
@@ -1826,34 +1355,26 @@ def _dmchba_clue_signature():
 
 
 def _dmchba_searched_count():
-    """Retained diagnostic helper used by the memory-equivalence harness."""
     count = 0
-    for value in grid:
-        if value == CELL_SEARCHED:
+    for v in grid:
+        if v == CELL_SEARCHED:
             count += 1
     return count
 
 
-def _dmchba_assignment_signature(task_count=None):
+def _dmchba_assignment_signature():
     """
-    Exact, compact signature of every assignment input.
+    Input signature used to avoid recomputing forever when no task is assigned.
 
-    Candidate IDs are stored losslessly as little-endian uint16 bytes. This
-    preserves the simulator's full ordered task tuple without retaining a
-    second object-heavy tuple of cells on the RP2040.
+    This intentionally stays compact for RP2040. It captures the local clue set,
+    current robot pose, known peer poses, and number of locally searched cells.
     """
-    if task_count is None:
-        task_count = _dmchba_candidate_indices()
-    packed_tasks = bytearray(task_count * 2)
-    for task_index in range(task_count):
-        cell_id = dmchba_candidate_ids[task_index]
-        packed_tasks[task_index * 2] = cell_id & 0xff
-        packed_tasks[task_index * 2 + 1] = cell_id >> 8
-    team = tuple(
-        (rid, cell[0], cell[1])
-        for rid, cell in _dmchba_team_agents()
-    )
-    return (_dmchba_clue_signature(), bytes(packed_tasks), team)
+    peers = []
+    for rid in sorted(peer_pos.keys(), key=_rid_sort_key):
+        cell = peer_pos.get(rid)
+        if cell is not None:
+            peers.append((rid, cell[0], cell[1]))
+    return (_dmchba_clue_signature(), pos[0], pos[1], tuple(peers), _dmchba_searched_count())
 
 
 def _dmchba_team_agents():
@@ -1868,262 +1389,128 @@ def _dmchba_team_agents():
 
 
 def _dmchba_valid_task(cell):
-    if cell is None:
-        return False
     x, y = cell
     if not (0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE):
         return False
-    checker = globals().get("_task_temporarily_invalid")
-    temporarily_invalid = (
-        checker(cell)
-        if checker is not None
-        else cell in globals().get("temporary_invalid_task_until", {})
-    )
-    return (
-        grid[idx(x, y)] == CELL_UNSEARCHED
-        and not temporarily_invalid
-    )
+    return grid[idx(x, y)] == CELL_UNSEARCHED
 
 
-def _dmchba_pack_cell(x, y):
-    return y * GRID_SIZE + x
-
-
-def _dmchba_unpack_cell(cell_id):
-    return (cell_id % GRID_SIZE, cell_id // GRID_SIZE)
-
-
-def _dmchba_candidate_precedes(left_id, right_id):
-    """Return True when left has the original candidate-sort priority."""
-    lx = left_id % GRID_SIZE
-    ly = left_id // GRID_SIZE
-    rx = right_id % GRID_SIZE
-    ry = right_id // GRID_SIZE
-    lp = target_p[idx(lx, ly)]
-    rp = target_p[idx(rx, ry)]
-    if lp != rp:
-        return lp > rp
-    ld = manhattan(pos[0], pos[1], lx, ly)
-    rd = manhattan(pos[0], pos[1], rx, ry)
-    if ld != rd:
-        return ld < rd
-    if lx != rx:
-        return lx < rx
-    return ly < ry
-
-
-def _dmchba_candidate_indices():
-    """Fill the packed Top-K buffer with canonical conditional ordering."""
-    started_us = time.ticks_us()
-    expiry = globals().get("_expire_temporary_invalid_tasks")
-    if expiry is not None:
-        expiry()
-    temporarily_invalid = globals().get(
-        "temporary_invalid_task_until", {})
-    count = 0
-    ranked = False
+def _dmchba_candidate_cells(team_agents):
+    """Select the hub-configured Top-K cells for the Hungarian solve."""
+    candidates = []
     for y in range(GRID_SIZE):
         for x in range(GRID_SIZE):
-            if (
-                grid[idx(x, y)] != CELL_UNSEARCHED
-                or (x, y) in temporarily_invalid
-            ):
-                continue
-            cell_id = _dmchba_pack_cell(x, y)
-            if count < TOP_K_MAX_CELLS:
-                dmchba_candidate_ids[count] = cell_id
-                count += 1
-                continue
-            if not ranked:
-                for sort_index in range(1, count):
-                    sort_id = dmchba_candidate_ids[sort_index]
-                    insert_at = sort_index
-                    while insert_at > 0 and _dmchba_candidate_precedes(
-                            sort_id, dmchba_candidate_ids[insert_at - 1]):
-                        dmchba_candidate_ids[insert_at] = (
-                            dmchba_candidate_ids[insert_at - 1])
-                        insert_at -= 1
-                    dmchba_candidate_ids[insert_at] = sort_id
-                ranked = True
-            if _dmchba_candidate_precedes(
-                    cell_id, dmchba_candidate_ids[count - 1]):
-                insert_at = TOP_K_MAX_CELLS - 1
-                while insert_at > 0 and _dmchba_candidate_precedes(
-                        cell_id, dmchba_candidate_ids[insert_at - 1]):
-                    dmchba_candidate_ids[insert_at] = dmchba_candidate_ids[insert_at - 1]
-                    insert_at -= 1
-                dmchba_candidate_ids[insert_at] = cell_id
-    record_candidate_filter_time(started_us)
-    return count
+            cell = (x, y)
+            if _dmchba_valid_task(cell):
+                candidates.append(cell)
+    if len(candidates) <= TOP_K_MAX_CELLS:
+        return candidates
+    candidates.sort(key=lambda cell: (
+        -target_p[idx(cell[0], cell[1])],
+        manhattan(pos[0], pos[1], cell[0], cell[1]),
+        cell,
+    ))
+    del candidates[TOP_K_MAX_CELLS:]
+    return candidates
 
 
-def _dmchba_cost(ref, cell):
-    """Canonical shared probability-adjusted base cost."""
+def _dmchba_cost(ref, cell, clone_index):
+    """Hungarian min-cost entry: distance - probability reward + deterministic tie bias.
+
+    Uses scaled integer costs to reduce cross-robot floating-point/tie variation
+    and keep the bounded hardware solve deterministic.
+    """
     x, y = cell
-    probability = target_p[idx(x, y)] / allocation_probability_normalizer
-    probability = max(0.0, min(1.0, probability))
-    distance = manhattan(ref[0], ref[1], x, y)
-    return distance + 8.0 * (1.0 - probability)
+    reward = prob_map[idx(x, y)] * REWARD_FACTOR
+    base = manhattan(ref[0], ref[1], x, y) - reward
+    # Tiny deterministic bias avoids unstable ties without affecting real score.
+    return int(base * DMCHBA_COST_SCALE) + (clone_index * 100) + (x * 10) + y
 
 
-def _dmchba_prepare_agent_task_costs(team_agents, task_count):
-    """Precompute only the non-clone agent-by-task portion of the costs."""
-    for agent_index in range(len(team_agents)):
-        ref = team_agents[agent_index][1]
-        costs = dmchba_agent_task_costs[agent_index]
-        for task_index in range(task_count):
-            cell_id = dmchba_candidate_ids[task_index]
-            x = cell_id % GRID_SIZE
-            y = cell_id // GRID_SIZE
-            costs[task_index] = _dmchba_cost(ref, (x, y))
-
-
-def _dmchba_virtual_cost(row_index, col_index, clones_per_agent, task_count):
-    if col_index >= task_count:
-        return DMCHBA_PSEUDOTASK_COST + col_index * DMCHBA_TIE_EPS
-    agent_index = row_index // clones_per_agent
-    clone_index = row_index % clones_per_agent
-    cell_id = dmchba_candidate_ids[col_index]
-    return (
-        dmchba_agent_task_costs[agent_index][col_index]
-        + DMCHBA_TIE_EPS * (
-            cell_id
-            + clone_index * 0.001
-            + row_index * 0.000001
-        )
-    )
-
-
-def _hungarian_minimize_virtual(matrix_n, clones_per_agent, task_count):
+def _hungarian_minimize(cost):
     """
-    Hungarian solver over the implicit clone matrix.
+    Dense square Hungarian solver for small RP2040-safe matrices.
 
-    The solver follows the same shortest-augmenting-path traversal as the
-    original implementation, but all O(n) work arrays are fixed and reused.
+    cost is a list of n rows, each with n numeric costs. Returns row_to_col,
+    where row_to_col[row] is the assigned column. Based on the standard
+    shortest augmenting path form for minimum-cost assignment.
     """
-    n = matrix_n
+    n = len(cost)
     if n == 0:
-        return dmchba_h_assignment
-    if n > DMCHBA_MAX_MATRIX_N:
-        raise MemoryError("DMCHBA matrix exceeds fixed workspace")
-
-    h_u = dmchba_h_u
-    h_v = dmchba_h_v
-    h_minv = dmchba_h_minv
-    h_p = dmchba_h_p
-    h_way = dmchba_h_way
-    h_used = dmchba_h_used
-    h_assignment = dmchba_h_assignment
-    agent_task_costs = dmchba_agent_task_costs
-
-    for j in range(n + 1):
-        h_u[j] = 0.0
-        h_v[j] = 0.0
-        h_p[j] = 0
-        h_way[j] = 0
-        h_minv[j] = DMCHBA_HUNGARIAN_INF
-        h_used[j] = 0
-        if j < n:
-            h_assignment[j] = -1
+        return []
+    u = [0] * (n + 1)
+    v = [0] * (n + 1)
+    p_match = [0] * (n + 1)
+    way = [0] * (n + 1)
 
     for i in range(1, n + 1):
-        h_p[0] = i
+        p_match[0] = i
         j0 = 0
-        for j in range(n + 1):
-            h_minv[j] = DMCHBA_HUNGARIAN_INF
-            h_used[j] = 0
-            h_way[j] = 0
+        minv = [1000000000000] * (n + 1)
+        used = [False] * (n + 1)
+        way = [0] * (n + 1)
         while True:
-            h_used[j0] = 1
-            i0 = h_p[j0]
-            row_index = i0 - 1
-            agent_index = row_index // clones_per_agent
-            delta = DMCHBA_HUNGARIAN_INF
+            used[j0] = True
+            i0 = p_match[j0]
+            delta = 1000000000000
             j1 = 0
+            row = cost[i0 - 1]
             for j in range(1, n + 1):
-                if h_used[j]:
+                if used[j]:
                     continue
-                col_index = j - 1
-                if col_index < task_count:
-                    cost_value = _dmchba_virtual_cost(
-                        row_index, col_index, clones_per_agent, task_count)
-                else:
-                    cost_value = (
-                        DMCHBA_PSEUDOTASK_COST
-                        + col_index * DMCHBA_TIE_EPS
-                    )
-                cur = cost_value - h_u[i0] - h_v[j]
-                if cur < h_minv[j]:
-                    h_minv[j] = cur
-                    h_way[j] = j0
-                if h_minv[j] < delta:
-                    delta = h_minv[j]
+                cur = row[j - 1] - u[i0] - v[j]
+                if cur < minv[j]:
+                    minv[j] = cur
+                    way[j] = j0
+                if minv[j] < delta:
+                    delta = minv[j]
                     j1 = j
             for j in range(0, n + 1):
-                if h_used[j]:
-                    h_u[h_p[j]] += delta
-                    h_v[j] -= delta
+                if used[j]:
+                    u[p_match[j]] += delta
+                    v[j] -= delta
                 else:
-                    h_minv[j] -= delta
+                    minv[j] -= delta
             j0 = j1
-            if h_p[j0] == 0:
+            if p_match[j0] == 0:
                 break
         while True:
-            j1 = h_way[j0]
-            h_p[j0] = h_p[j1]
+            j1 = way[j0]
+            p_match[j0] = p_match[j1]
             j0 = j1
             if j0 == 0:
                 break
 
+    row_to_col = [None] * n
     for j in range(1, n + 1):
-        if h_p[j] > 0:
-            h_assignment[h_p[j] - 1] = j - 1
-    return h_assignment
+        if p_match[j] > 0:
+            row_to_col[p_match[j] - 1] = j - 1
+    return row_to_col
 
 
-def _dmchba_order_assigned_ids(assigned_count):
-    """Return only the behaviorally observable committed greedy prefix."""
+def _dmchba_order_assigned_cells(cells):
+    """Greedily order this robot's assigned cells from the current route endpoint."""
+    remaining = list(cells)
     ordered = []
-    ref_x = pos[0]
-    ref_y = pos[1]
-    remaining_count = assigned_count
-    while remaining_count > 0 and len(ordered) < DMCHBA_COMMITMENT_HORIZON:
+    ref = (pos[0], pos[1])
+    while remaining:
         best_i = 0
         best_score = -1000000000.0
-        best_id = dmchba_assigned_ids[0]
-        for i in range(remaining_count):
-            cell_id = dmchba_assigned_ids[i]
-            x = cell_id % GRID_SIZE
-            y = cell_id // GRID_SIZE
-            distance = manhattan(ref_x, ref_y, x, y)
-            score = -_dmchba_cost((ref_x, ref_y), (x, y))
+        best_cell = remaining[0]
+        for i, cell in enumerate(remaining):
+            x, y = cell
+            reward = prob_map[idx(x, y)] * REWARD_FACTOR
+            score = reward - manhattan(ref[0], ref[1], x, y)
             if score > best_score + DMCHBA_TIE_EPS:
                 best_i = i
                 best_score = score
-                best_id = cell_id
-            elif abs(score - best_score) <= DMCHBA_TIE_EPS:
-                best_x = best_id % GRID_SIZE
-                best_y = best_id // GRID_SIZE
-                best_distance = manhattan(
-                    ref_x, ref_y, best_x, best_y)
-                if (
-                    distance < best_distance
-                    or (
-                        distance == best_distance
-                        and (x < best_x or (x == best_x and y < best_y))
-                    )
-                ):
-                    best_i = i
-                    best_score = score
-                    best_id = cell_id
-        best_x = best_id % GRID_SIZE
-        best_y = best_id // GRID_SIZE
-        ordered.append((best_x, best_y))
-        ref_x = best_x
-        ref_y = best_y
-        for i in range(best_i, remaining_count - 1):
-            dmchba_assigned_ids[i] = dmchba_assigned_ids[i + 1]
-        remaining_count -= 1
+                best_cell = cell
+            elif abs(score - best_score) <= DMCHBA_TIE_EPS and _cell_sort_key(cell) < _cell_sort_key(best_cell):
+                best_i = i
+                best_cell = cell
+        ordered.append(best_cell)
+        ref = best_cell
+        remaining.pop(best_i)
     return ordered
 
 
@@ -2145,14 +1532,10 @@ def _dmchba_should_reassign():
     _dmchba_drop_invalid_path_cells()
 
     clue_sig = _dmchba_clue_signature()
-    if dmchba_clue_signature is None:
+    if clue_sig != dmchba_clue_signature:
         dmchba_clue_signature = clue_sig
         dmchba_path = []
         return "clue_changed"
-    if clue_sig != dmchba_clue_signature:
-        # Later clues update the shared belief but do not discard an active
-        # commitment. This is the simulator's event-triggered cadence.
-        dmchba_clue_signature = clue_sig
 
     if not dmchba_path:
         sig = _dmchba_assignment_signature()
@@ -2162,51 +1545,61 @@ def _dmchba_should_reassign():
     return None
 
 
-def _dmchba_run_assignment_impl(reason):
+def _dmchba_run_assignment(reason):
     """Run bounded matching-by-clone Hungarian assignment and store our path."""
     global dmchba_path, dmchba_last_assignment_signature
 
     team_agents = _dmchba_team_agents()
-    task_count = _dmchba_candidate_indices()
-    dmchba_last_assignment_signature = _dmchba_assignment_signature(
-        task_count)
+    tasks = _dmchba_candidate_cells(team_agents)
+    dmchba_last_assignment_signature = _dmchba_assignment_signature()
 
-    if task_count == 0 or not team_agents:
+    if not tasks or not team_agents:
         dmchba_path = []
         return
 
     num_agents = len(team_agents)
-    clones_per_agent = (task_count + num_agents - 1) // num_agents
+    num_tasks = len(tasks)
+    clones_per_agent = (num_tasks + num_agents - 1) // num_agents
     if clones_per_agent < 1:
         clones_per_agent = 1
 
-    matrix_n = clones_per_agent * num_agents
-    _dmchba_prepare_agent_task_costs(team_agents, task_count)
-    row_to_col = _hungarian_minimize_virtual(
-        matrix_n, clones_per_agent, task_count)
-    assigned_count = 0
-    for row_i in range(matrix_n):
-        col_i = row_to_col[row_i]
-        if col_i < 0 or col_i >= task_count:
+    clone_rows = []
+    for rid, ref in team_agents:
+        for clone_index in range(clones_per_agent):
+            clone_rows.append((rid, ref, clone_index))
+
+    matrix_n = len(clone_rows)
+    columns = list(tasks)
+    while len(columns) < matrix_n:
+        columns.append(None)
+
+    cost = []
+    for rid, ref, clone_index in clone_rows:
+        row = []
+        for cell in columns:
+            if cell is None:
+                row.append(DMCHBA_PSEUDOTASK_COST)
+            else:
+                row.append(_dmchba_cost(ref, cell, clone_index))
+        cost.append(row)
+
+    row_to_col = _hungarian_minimize(cost)
+    assigned = []
+    for row_i, col_i in enumerate(row_to_col):
+        if col_i is None or col_i < 0 or col_i >= len(columns):
             continue
-        rid = team_agents[row_i // clones_per_agent][0]
+        cell = columns[col_i]
+        if cell is None:
+            continue
+        rid, _, _ = clone_rows[row_i]
         if rid == ROBOT_ID:
-            dmchba_assigned_ids[assigned_count] = dmchba_candidate_ids[col_i]
-            assigned_count += 1
+            assigned.append(cell)
 
-    dmchba_path = _dmchba_order_assigned_ids(assigned_count)
-
-
-def _dmchba_run_assignment(reason):
-    started_us = time.ticks_us()
-    filter_time_before_us = candidate_filter_time_us_total
-    try:
-        _dmchba_run_assignment_impl(reason)
-    finally:
-        record_allocator_solve_time(started_us, filter_time_before_us)
+    ordered = _dmchba_order_assigned_cells(assigned)
+    dmchba_path = ordered[:DMCHBA_COMMITMENT_HORIZON]
 
 
-def _pick_task_cell_impl():
+def pick_task_cell():
     """
     Select the next DMCHBA task cell.
 
@@ -2216,75 +1609,27 @@ def _pick_task_cell_impl():
     bid/claim/task-cell messages are sent. Collision avoidance remains separate
     and uses only next-step intent messages.
     """
-    global dmchba_path, pending_collision_reallocation
-    if pending_collision_reallocation:
-        pending_collision_reallocation = False
-        dmchba_path = []
-        reason = "collision_avoidance"
-    else:
-        reason = _dmchba_should_reassign()
+    reason = _dmchba_should_reassign()
     if reason is not None:
         _dmchba_run_assignment(reason)
 
     _dmchba_drop_invalid_path_cells()
     if dmchba_path:
         return dmchba_path[0]
-    return None
 
-
-def pick_task_cell():
-    started_us = time.ticks_us()
-    try:
-        return _pick_task_cell_impl()
-    finally:
-        record_allocator_time(started_us)
-
-
-def _dmchba_defer_collision_reallocation():
-    """Leave allocator state intact until the next canonical choose boundary."""
-    global current_task_cell, pending_collision_reallocation
-    current_task_cell = None
-    pending_collision_reallocation = True
-
-
-def _retry_original_goal_after_failed_alternate(blocked_retry_cells):
-    """Retry the protected route once when blocking its first step has no path."""
-    if not first_clue_seen or not blocked_retry_cells:
-        return False
-    publish_intent()
-    blocked_retry_cells.clear()
-    return True
-
-
-def _dmchba_complete_cell_arrival(cell_i):
-    """Publish and observe a move without clearing its protected intent."""
-    global first_clue_seen, current_task_cell
-
-    publish_position()
-    grid[cell_i] = CELL_SEARCHED
-    update_target_on_miss(cell_i)
-
-    reached_allocator_goal = False
-    if (
-        current_task_cell is not None
-        and pos[0] == current_task_cell[0]
-        and pos[1] == current_task_cell[1]
-    ):
-        current_task_cell = None
-        reached_allocator_goal = True
-
-    if not found_target:
-        potential_clue = (pos[0], pos[1])
-        if potential_clue not in clues and at_intersection_and_white():
-            clues.append(potential_clue)
-            first_clue_seen = True
-            update_prob_map()
-            publish_clue(pos[0], pos[1])
-            update_mem_headroom()
-            gc.collect()
-
-    return reached_allocator_goal
-
+    # Fallback if the bounded candidate solve gives this robot no task.
+    # Keep the search alive by taking the nearest unsearched cell.
+    best = None
+    best_dist = 9999
+    for y in range(GRID_SIZE):
+        for x in range(GRID_SIZE):
+            if grid[idx(x, y)] != CELL_UNSEARCHED:
+                continue
+            d = manhattan(pos[0], pos[1], x, y)
+            if d < best_dist:
+                best_dist = d
+                best = (x, y)
+    return best
 
 def next_serpentine_task_cell_in_band():
     """
@@ -2358,32 +1703,23 @@ def a_star(start, task_cell):
       +1 per step
       + TURN_COST per 90-degree heading change
       + cfg.VISITED_STEP_PENALTY if stepping onto a visited cell (grid==2)
-      (all protected peer positions are route-blocked)
+      (peer positions only block the immediate next step from start)
     The reward from prob_map is applied as a bonus in the node priority.
     Returns a path as a list: [start, ..., task_cell], or [] if failure.
     """
     # Simple energy tracking - no function call counting needed
     frontier.clear()
-    if start == task_cell:
-        return [start]
-    # Whole-route planning uses accepted (droppable) shared state. Protected
-    # position/intent observations are reserved for the final one-step check.
-    blocked_peers = set(peer_pos.values())
-    blocked_peers.discard(start)
-    if task_cell in blocked_peers:
-        return []
     for i in range(GRID_SIZE * GRID_SIZE):
         came_from[i] = -1
         cost_so_far[i] = 1e30
 
     start_idx = idx(start[0], start[1])
     task_cell_idx = idx(task_cell[0], task_cell[1])
-    tie = 0
-    heapq.heappush(frontier, (0.0, tie, start_idx, heading))
+    heapq.heappush(frontier, (0, start_idx, heading))
     came_from[start_idx] = start_idx
     cost_so_far[start_idx] = 0.0
     while frontier and running and not found_target:
-        _, _, current_idx, cur_dir = heapq.heappop(frontier)
+        _, current_idx, cur_dir = heapq.heappop(frontier)
         if current_idx == task_cell_idx:
             break
 
@@ -2396,8 +1732,10 @@ def a_star(start, task_cell):
             i = idx(nx, ny)
             if grid[i] == CELL_OBSTACLE:  # obstacle/reserved
                 continue
-            if (nx, ny) in blocked_peers:
-                continue
+            # Only block peer positions for the very next move from start
+            if current_idx == start_idx:
+                if peer_pos and (nx, ny) in peer_pos.values():
+                    continue
 
             move_cost = 1.0
             turns = quarter_turns(cur_dir, (dx, dy))
@@ -2405,7 +1743,7 @@ def a_star(start, task_cell):
             visited_pen = cfg.VISITED_STEP_PENALTY if grid[i] == CELL_SEARCHED else 0.0
             base_cost = move_cost + turn_cost + visited_pen
 
-            reward_bonus = target_p[i] * REWARD_FACTOR
+            reward_bonus = prob_map[i] * REWARD_FACTOR
             max_bonus = base_cost - 0.01
             if max_bonus < 0.0:
                 max_bonus = 0.0
@@ -2425,8 +1763,7 @@ def a_star(start, task_cell):
                     + abs(task_cell[0] - nx)
                     + abs(task_cell[1] - ny)
                 )
-                tie += 1
-                heapq.heappush(frontier, (priority, tie, i, (dx, dy)))
+                heapq.heappush(frontier, (priority, i, (dx, dy)))
                 came_from[i] = current_idx
 
     if came_from[task_cell_idx] == -1:
@@ -2453,35 +1790,25 @@ def _reset_allocator_for_next_trial():
 def reset_search_state_for_next_trial():
     """Clear trial/world knowledge after returning home."""
     global first_clue_seen, found_target, target_location, current_task_cell
-    global target_bump_stop, abort_signal
+    global target_bump_stop
     global last_task_cell, collision_event_counted_since_move, METRIC_START_TIME_MS
     global peer_intent, peer_pos, peer_pos_yield, heading
-    global communicated_intent, blocked_goal_cell, blocked_goal_conflicts
-    global allocation_probability_normalizer, pending_collision_reallocation
 
     for i in range(GRID_SIZE * GRID_SIZE):
         grid[i] = CELL_UNSEARCHED
         target_p[i] = 1.0 / (GRID_SIZE * GRID_SIZE)
         prob_map[i] = target_p[i]
     clues[:] = []
-    published_clues.clear()
-    peer_intent.clear()
-    peer_pos.clear()
-    peer_pos_yield.clear()
-    communicated_intent = None
-    allocation_probability_normalizer = 1.0 / (GRID_SIZE * GRID_SIZE)
+    peer_intent = {}
+    peer_pos = {}
+    peer_pos_yield = {}
     first_clue_seen = False
     found_target = False
-    abort_signal = False
     target_bump_stop = False
     target_location = None
     current_task_cell = None
     last_task_cell = None
     collision_event_counted_since_move = False
-    blocked_goal_cell = None
-    blocked_goal_conflicts = 0
-    pending_collision_reallocation = False
-    temporary_invalid_task_until.clear()
     METRIC_START_TIME_MS = None
     heading = (START_HEADING[0], START_HEADING[1])
     _reset_allocator_for_next_trial()
@@ -2516,7 +1843,6 @@ def recover_target_finder_to_last_intersection():
         if return_home_blocked or not running:
             return False
         publish_position()
-        publish_intent()
         return True
     finally:
         returning_home = False
@@ -2572,7 +1898,6 @@ def return_home():
             pos[0], pos[1] = nxt
             blocked_cells.clear()
             publish_position()
-            publish_intent()
 
         if running:
             desired_neighbor = (
@@ -2583,7 +1908,6 @@ def return_home():
             heading = (START_HEADING[0], START_HEADING[1])
             motors_off()
             publish_position()
-            publish_intent()
             return True
         return False
     finally:
@@ -2593,17 +1917,15 @@ def return_home():
 
 
 def wait_for_trial_start():
-    """Remain responsive at home until RUN releases this armed trial."""
+    """Remain responsive at home until the hub sends command 2."""
     last_pose_publish = time.ticks_ms()
-    while running and not start_signal and not abort_signal:
+    while running and not start_signal:
         uart_service()
         now = time.ticks_ms()
         if time.ticks_diff(now, last_pose_publish) >= 500 and not pre_start_signal:
             publish_position()
             last_pose_publish = now
         time.sleep_ms(10)
-    if abort_signal:
-        return False
     return running and start_signal
 
 
@@ -2616,9 +1938,6 @@ def run_active_trial():
     global first_clue_seen, move_forward_flag, pos, target_bump_stop
     global task_cell_replan_count, path_replan_count, collision_prevention_count
     global current_task_cell, last_task_cell, collision_event_counted_since_move
-    global blocked_goal_cell, blocked_goal_conflicts
-    global dmchba_path, dmchba_last_assignment_signature
-    global pending_collision_reallocation
     global busy_ms, mem_free_min
     try:
         while running and not found_target:
@@ -2631,37 +1950,17 @@ def run_active_trial():
             blocked_retry_cells = set()
             try:
                 prev_task_cell = current_task_cell
-                previous_task_completed = (
-                    prev_task_cell is not None
-                    and grid[idx(prev_task_cell[0], prev_task_cell[1])]
-                    == CELL_SEARCHED
-                )
+                previous_task_completed = prev_task_cell is not None and grid[idx(prev_task_cell[0], prev_task_cell[1])] == CELL_SEARCHED
                 previous_task_invalidated = (
                     (prev_task_cell is not None and not previous_task_completed)
-                    or (
-                        prev_task_cell is None
-                        and last_task_cell is not None
-                        and grid[idx(last_task_cell[0], last_task_cell[1])]
-                        != CELL_SEARCHED
-                    )
+                    or (prev_task_cell is None and last_task_cell is not None and grid[idx(last_task_cell[0], last_task_cell[1])] != CELL_SEARCHED)
                 )
-                if (
-                    current_task_cell is not None
-                    and grid[idx(
-                        current_task_cell[0], current_task_cell[1]
-                    )] == CELL_UNSEARCHED
-                    and not _task_temporarily_invalid(current_task_cell)
-                ):
-                    task_cell = current_task_cell
+                if not first_clue_seen:
+                    task_cell = next_serpentine_task_cell_in_band()
                 else:
-                    current_task_cell = None
-                    if not first_clue_seen:
-                        task_cell = next_serpentine_task_cell_in_band()
-                    else:
-                        task_cell = pick_task_cell()
+                    task_cell = pick_task_cell()
                 if task_cell is None:
                     current_task_cell = None
-                    publish_intent()
                     busy_timer_pause()
                     for _ in range(10):
                         uart_service()
@@ -2671,17 +1970,14 @@ def run_active_trial():
 
                 if task_cell != prev_task_cell:
                     if task_cell is not None and task_cell != last_task_cell:
-                        if (
-                            previous_task_invalidated
-                            and first_clue_seen
-                            and not metrics_frozen
-                        ):
+                        if previous_task_invalidated and first_clue_seen:
                             task_cell_replan_count += 1
                         last_task_cell = task_cell
                     # DMCHBA task cells/current tasks are internal only; do not publish.
                     current_task_cell = task_cell
 
-                path = []
+                blocked_retry_cells.clear()
+
                 while True:
                     # Temporarily treat any blocked retry cells as obstacles for planning
                     _block_backup = []
@@ -2699,65 +1995,44 @@ def run_active_trial():
                     # Maintain low memory usage between planning iterations
                     gc.collect()
                     if len(path) < 2:
-                        if first_clue_seen and not metrics_frozen:
+                        if first_clue_seen:
                             path_replan_count += 1
-                        if _retry_original_goal_after_failed_alternate(
-                            blocked_retry_cells
-                        ):
-                            continue
                         break
 
                     nxt = path[1]
 
+                    # Publish only next-step safety intent so peers can yield if needed
                     publish_intent(nxt[0], nxt[1])
-                    busy_timer_pause()
-                    turn_towards(tuple(pos), nxt)
-                    for _ in range(10):
+
+                    # Give peers a moment to publish their intent and process it
+                    for _ in range(5):
                         uart_service()
+                        busy_timer_pause()
                         time.sleep_ms(10)
-                    if not running or found_target:
-                        break
-                    collision_blocked = i_should_yield(nxt[0], nxt[1])
-                    busy_timer_resume()
+                        busy_timer_resume()
 
-                    if collision_blocked:
+                    if i_should_yield(nxt[0], nxt[1]):
+                        # Short back-off then force allocator-level replanning.
+                        # Collision avoidance is based only on next-step intent,
+                        # not communicated task cells or task claims.
                         if first_clue_seen:
-                            _register_goal_conflict(task_cell)
-                            if not metrics_frozen:
-                                path_replan_count += 1
-                                if not collision_event_counted_since_move:
-                                    collision_prevention_count += 1
-                                    collision_event_counted_since_move = True
+                            path_replan_count += 1
+                            if not collision_event_counted_since_move:
+                                collision_prevention_count += 1
+                                collision_event_counted_since_move = True
+                        if first_clue_seen:
+                            dmchba_path = []
+                            current_task_cell = None
+                        busy_timer_pause()
+                        time.sleep_ms(300)
+                        busy_timer_resume()
                         blocked_retry_cells.add(nxt)
-                        if first_clue_seen and blocked_goal_conflicts >= 2:
-                            publish_intent()
-                            _dmchba_defer_collision_reallocation()
-                            backoff_ms = int(random.random() * 5000.0)
-                            now_ms = _temporarily_invalidate_task(
-                                task_cell, backoff_ms)
-                            blocked_goal_cell = None
-                            blocked_goal_conflicts = 0
-                            busy_timer_pause()
-                            deadline = time.ticks_add(
-                                now_ms, backoff_ms)
-                            while (
-                                running and not found_target
-                                and time.ticks_diff(
-                                    deadline, time.ticks_ms()) > 0
-                            ):
-                                uart_service()
-                                time.sleep_ms(10)
-                            busy_timer_resume()
-                            path = []
-                            break
-                        continue
+                        path = []
+                        break
                     break
 
-                if not running or found_target:
-                    break
                 if len(path) < 2:
                     current_task_cell = None
-                    publish_intent()
                     busy_timer_pause()
                     for _ in range(10):
                         uart_service()
@@ -2765,7 +2040,12 @@ def run_active_trial():
                     busy_timer_resume()
                     continue
 
+                # Face the neighbor and try to move one cell
                 busy_timer_pause()
+                turn_towards(tuple(pos), nxt)
+                if not running or found_target:
+                    break
+
                 move_forward_flag = True
                 while move_forward_flag:
                     uart_service()
@@ -2780,18 +2060,34 @@ def run_active_trial():
                 # Arrived + update state & publish
                 pos[0], pos[1] = nxt[0], nxt[1]
                 collision_event_counted_since_move = False
-                blocked_goal_cell = None
-                blocked_goal_conflicts = 0
-                if not metrics_frozen:
-                    record_intersection(pos[0], pos[1])
+                record_intersection(pos[0], pos[1])
                 cell_i = idx(pos[0], pos[1])
-                _dmchba_complete_cell_arrival(cell_i)
+                grid[cell_i] = CELL_SEARCHED
+                # If we just reached the front of our committed DMCHBA path,
+                # remove it so the next cycle follows the next assigned cell.
+                if first_clue_seen and dmchba_path and tuple(pos) == dmchba_path[0]:
+                    dmchba_path.pop(0)
+                publish_position()
+                update_target_on_miss(cell_i)
 
                 if found_target:
                     break
+
+                # Clue detection: centered + white center sensor
+                potential_clue = (pos[0], pos[1])
+                #added check so that robots not rechecking know clue locations
+                if potential_clue not in clues:
+                    detected = at_intersection_and_white()
+                    if detected:
+                        clues.append(potential_clue)
+                        first_clue_seen = True
+                        publish_clue(pos[0], pos[1])
+
+                        update_prob_map()      # rebuild target_p from all clues
+                        update_mem_headroom()
+                        gc.collect()
             finally:
-                if not metrics_frozen:
-                    busy_ms += busy_timer_value_ms()
+                busy_ms += busy_timer_value_ms()
                 update_mem_headroom()
     finally:
         motors_off()
@@ -2800,19 +2096,23 @@ def run_active_trial():
 def search_loop():
     """Calibrate once, then run repeated search/log/return-home trials."""
     global start_signal, pre_start_signal, trial_active, found_target
+    global METRIC_START_TIME_MS
     try:
         calibrate()
         while running:
             reset_search_state_for_next_trial()
             if not wait_for_trial_start():
-                if not running:
-                    break
-                continue
+                break
             pre_start_signal = False
 
+            reset_trial_metrics()
             grid[idx(pos[0], pos[1])] = CELL_SEARCHED
             update_target_on_miss(idx(pos[0], pos[1]))
             update_prob_map()
+            METRIC_START_TIME_MS = time.ticks_ms()
+            trial_active = True
+            found_target = False
+            publish_position()
             check_current_cell_for_clue("start_signal")
 
             run_active_trial()
