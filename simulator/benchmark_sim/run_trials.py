@@ -34,6 +34,16 @@ def parse_positive_int(value: str) -> int:
     return parsed
 
 
+def parse_nonnegative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return parsed
+
+
 def parse_max_candidate_cells(value: str) -> int | None:
     if str(value).lower() == "all":
         return None
@@ -194,6 +204,24 @@ def parse_args() -> argparse.Namespace:
                    help="Model-specific level: Bernoulli drop probability, GE long-run delivery probability, or Rayleigh sensitivity dBm.")
     p.add_argument("--max-trials", type=parse_positive_int, default=None)
     p.add_argument(
+        "--trial-shard-count",
+        type=parse_positive_int,
+        default=1,
+        help=(
+            "Partition the validated scenario selection into this many "
+            "round-robin shards (default: 1)."
+        ),
+    )
+    p.add_argument(
+        "--trial-shard-index",
+        type=parse_nonnegative_int,
+        default=0,
+        help=(
+            "Zero-based round-robin shard to execute. The full selected-scenario "
+            "hash and manifest are preserved in every shard."
+        ),
+    )
+    p.add_argument(
         "--debug-max-events",
         type=parse_positive_int,
         default=5_000,
@@ -273,6 +301,21 @@ def scenarios_for_args(args: argparse.Namespace) -> list[TrialScenario]:
     if not args.scenario_file:
         raise ValueError("--scenario-file is required for clue_search mode")
     return load_scenarios(args.scenario_file, max_trials=args.max_trials)
+
+
+def select_scenario_shard(
+    scenarios: list[TrialScenario],
+    shard_count: int,
+    shard_index: int,
+) -> list[TrialScenario]:
+    if shard_count <= 0:
+        raise ValueError("--trial-shard-count must be positive")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError(
+            "--trial-shard-index must be in "
+            f"[0, {shard_count}), got {shard_index}"
+        )
+    return scenarios[shard_index::shard_count]
 
 
 def clue_locations_text(scenario: TrialScenario) -> str:
@@ -544,7 +587,14 @@ def main() -> None:
         "study_profile": args.study_profile,
         "seed": args.seed,
         "retry_failed": bool(args.retry_failed),
+        "trial_shard_count": args.trial_shard_count,
+        "trial_shard_index": args.trial_shard_index,
     }
+    run_scenarios = select_scenario_shard(
+        scenarios,
+        args.trial_shard_count,
+        args.trial_shard_index,
+    )
 
     (
         trial_summary_rows,
@@ -579,8 +629,8 @@ def main() -> None:
                 flush=True,
             )
     done_trial_ids = recorded_trial_ids(trial_summary_rows, system_performance_rows)
-    total_scenarios = len(scenarios)
-    scenario_ids = {scenario.trial_id for scenario in scenarios}
+    total_scenarios = len(run_scenarios)
+    scenario_ids = {scenario.trial_id for scenario in run_scenarios}
     resumed_count = len(done_trial_ids & scenario_ids)
     if resumed_count:
         print(
@@ -589,7 +639,7 @@ def main() -> None:
         )
 
     scenario_file = str(Path(args.scenario_file)) if args.scenario_file else ""
-    for scenario in scenarios:
+    for scenario in run_scenarios:
         if scenario.trial_id in done_trial_ids:
             print(f"skipping recorded trial {scenario.trial_id}", flush=True)
             continue

@@ -4,7 +4,8 @@ import argparse
 import unittest
 
 from benchmark_sim.config import SimConfig
-from benchmark_sim.run_trials import apply_study_profile
+from benchmark_sim.core.types import TrialScenario
+from benchmark_sim.run_trials import apply_study_profile, select_scenario_shard
 
 
 def _args(**overrides) -> argparse.Namespace:
@@ -21,6 +22,30 @@ def _args(**overrides) -> argparse.Namespace:
 
 
 class StudyProfileTests(unittest.TestCase):
+    def test_scenario_shards_partition_without_changing_order(self) -> None:
+        scenarios = [
+            TrialScenario(trial_id=index, target=(index, 0), clues=[])
+            for index in range(7)
+        ]
+
+        shards = [
+            select_scenario_shard(scenarios, shard_count=3, shard_index=index)
+            for index in range(3)
+        ]
+
+        self.assertEqual(
+            [[scenario.trial_id for scenario in shard] for shard in shards],
+            [[0, 3, 6], [1, 4], [2, 5]],
+        )
+        self.assertEqual(
+            sorted(scenario.trial_id for shard in shards for scenario in shard),
+            list(range(7)),
+        )
+
+    def test_scenario_shards_reject_invalid_index(self) -> None:
+        with self.assertRaisesRegex(ValueError, "trial-shard-index"):
+            select_scenario_shard([], shard_count=2, shard_index=2)
+
     def test_programmatic_config_is_custom_unless_profile_is_explicit(self) -> None:
         self.assertEqual(SimConfig().study_profile, "custom")
 

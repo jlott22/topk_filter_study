@@ -1,0 +1,96 @@
+{
+  "sim_config": {
+    "trial_mode": "clue_search",
+    "grid_size": 19,
+    "robot_ids": [
+      "00",
+      "01",
+      "02",
+      "03"
+    ],
+    "start_positions": {
+      "00": [
+        0,
+        0
+      ],
+      "01": [
+        0,
+        6
+      ],
+      "02": [
+        0,
+        12
+      ],
+      "03": [
+        0,
+        18
+      ]
+    },
+    "start_headings": {
+      "00": [
+        1,
+        0
+      ],
+      "01": [
+        1,
+        0
+      ],
+      "02": [
+        1,
+        0
+      ],
+      "03": [
+        1,
+        0
+      ]
+    },
+    "robot_start_layout": "edge_even",
+    "condition_id": "cbaa_topk_5",
+    "target_cells_per_robot": null,
+    "actual_cells_per_robot": null,
+    "target_decay_exp": 1.0,
+    "reward_factor": 5.0,
+    "move_cost": 1.0,
+    "turn_cost": 0.3,
+    "visited_step_penalty": 4.0,
+    "min_step_cost": 0.01,
+    "async_step_mean_s": 1.6,
+    "async_step_jitter_s": 0.1,
+    "async_min_delay_s": 1.5,
+    "async_max_delay_s": 1.7,
+    "async_initial_spread_s": 0.1,
+    "async_tick_span_s": 0.25,
+    "turn_quarter_s": 0.3,
+    "replan_delay_s": 0.3,
+    "no_goal_delay_s": 0.5,
+    "comm_delay_s": 0.04,
+    "comm_delay_jitter_s": 0.01,
+    "collision_intent_settle_s": 0.1,
+    "collision_goal_backoff_max_s": 5.0,
+    "debug_max_events": 15000,
+    "write_parquet": false,
+    "commitment_horizon": 3,
+    "max_candidate_cells": 18,
+    "top_k_rate": 0.05,
+    "logic_revision": "dcta_parity_v1",
+    "study_profile": "topk_filter",
+    "scenario_file_sha256": "aa0724188407797eae5187348bee11ee9f51317c4e8a201863b052786aa2f1df",
+    "scenario_selection_sha256": "823213c90703fd83224ad7122ee730ba64af3769ea517af252103bddd907f681"
+  },
+  "logic_revision": "dcta_parity_v1",
+  "scenario_file_sha256": "aa0724188407797eae5187348bee11ee9f51317c4e8a201863b052786aa2f1df",
+  "scenario_selection_sha256": "823213c90703fd83224ad7122ee730ba64af3769ea517af252103bddd907f681",
+  "expected_scenario_sha256": "823213c90703fd83224ad7122ee730ba64af3769ea517af252103bddd907f681",
+  "scenario_manifest_lock": "/home/agxorin/topk_filter_study/results/topk_simulation_scenario_manifest.json",
+  "algorithm": "benchmark_sim.algorithms.CBAA:CBAAAllocator",
+  "algorithm_name": "CBAA",
+  "comm_model": "ideal",
+  "comm_level": "1.0",
+  "scenario_file": "/home/agxorin/topk_filter_study/simulator/scenarios/final_trial_500.csv",
+  "trial_mode": "clue_search",
+  "study_profile": "topk_filter",
+  "seed": 0,
+  "retry_failed": false,
+  "trial_shard_count": 36,
+  "trial_shard_index": 14
+}
