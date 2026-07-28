@@ -1,9 +1,9 @@
 {
-  "updated_at_unix": 1785097627.6603403,
+  "updated_at_unix": 1785278779.2627954,
   "conditions_complete": 324,
   "conditions_total": 324,
-  "recorded_trials": 16200,
-  "expected_trials": 16200,
+  "recorded_trials": 18000,
+  "expected_trials": 18000,
   "failed_trial_rows": 16,
   "by_suite": {
     "scale": {
@@ -19,7 +19,7 @@
     "multitarget": {
       "conditions": 36,
       "complete": 36,
-      "recorded_trials": 1800
+      "recorded_trials": 3600
     }
   },
   "verification_issues": 0,

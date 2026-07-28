@@ -1,30 +1,51 @@
 {
+  "algorithm": "known_visit_sim.algorithms.PI:PIAllocator",
+  "algorithm_name": "PI",
+  "allocator_solve_time_definition": "allocator total minus nested filter time",
+  "allocator_time_definition": "complete choose_goal call including filter",
+  "candidate_filter_time_definition": "candidate discovery, ranking, and truncation",
+  "comm_level": "1.0",
+  "comm_model": "ideal",
+  "num_trials": 100,
+  "scenario_file": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\scenarios\\known_targets_g19_t50_n100.csv",
+  "scenario_sha256": "7537b0408132e9d6eaeb5544f867c6647609c309f1aa471ac5b8022e39405309",
+  "seed": 839171,
   "sim_config": {
+    "async_initial_spread_s": 0.1,
+    "async_max_delay_s": 1.7,
+    "async_min_delay_s": 1.5,
+    "async_step_jitter_s": 0.1,
+    "async_step_mean_s": 1.6,
+    "async_tick_span_s": 0.25,
+    "collision_goal_backoff_max_s": 5.0,
+    "collision_goal_quarantine_schedule_s": [
+      5.0,
+      15.0,
+      45.0,
+      120.0
+    ],
+    "collision_intent_settle_s": 0.1,
+    "comm_delay_jitter_s": 0.01,
+    "comm_delay_s": 0.04,
+    "commitment_horizon": 3,
+    "condition_id": "multitarget_g19_r4_t50_pi_topk050",
+    "debug_max_events": 5000,
+    "debug_max_stagnant_events": 2000,
     "grid_size": 19,
+    "max_candidate_cells": 25,
+    "min_step_cost": 0.01,
+    "move_cost": 1.0,
+    "no_goal_delay_s": 0.5,
+    "replan_delay_s": 0.3,
+    "reward_factor": 5.0,
     "robot_ids": [
       "00",
       "01",
       "02",
       "03"
     ],
-    "start_positions": {
-      "00": [
-        0,
-        0
-      ],
-      "01": [
-        0,
-        6
-      ],
-      "02": [
-        0,
-        12
-      ],
-      "03": [
-        0,
-        18
-      ]
-    },
+    "robot_start_layout": "edge_even",
+    "stalled_allocation_recovery_s": 120.0,
     "start_headings": {
       "00": [
         1,
@@ -43,42 +64,27 @@
         0
       ]
     },
-    "robot_start_layout": "edge_even",
-    "condition_id": "multitarget_g19_r4_t50_pi_topk050",
-    "reward_factor": 5.0,
-    "move_cost": 1.0,
+    "start_positions": {
+      "00": [
+        0,
+        0
+      ],
+      "01": [
+        0,
+        6
+      ],
+      "02": [
+        0,
+        12
+      ],
+      "03": [
+        0,
+        18
+      ]
+    },
     "turn_cost": 0.3,
-    "visited_step_penalty": 4.0,
-    "min_step_cost": 0.01,
-    "async_step_mean_s": 1.6,
-    "async_step_jitter_s": 0.1,
-    "async_min_delay_s": 1.5,
-    "async_max_delay_s": 1.7,
-    "async_initial_spread_s": 0.1,
-    "async_tick_span_s": 0.25,
     "turn_quarter_s": 0.3,
-    "replan_delay_s": 0.3,
-    "no_goal_delay_s": 0.5,
-    "comm_delay_s": 0.04,
-    "comm_delay_jitter_s": 0.01,
-    "collision_intent_settle_s": 0.1,
-    "collision_goal_backoff_max_s": 5.0,
-    "collision_goal_quarantine_schedule_s": [
-      5.0,
-      15.0,
-      45.0,
-      120.0
-    ],
-    "stalled_allocation_recovery_s": 120.0,
-    "debug_max_events": 5000,
-    "debug_max_stagnant_events": 2000,
-    "commitment_horizon": 3,
-    "max_candidate_cells": 25
+    "visited_step_penalty": 4.0
   },
-  "algorithm": "known_visit_sim.algorithms.PI:PIAllocator",
-  "algorithm_name": "PI",
-  "comm_model": "ideal",
-  "comm_level": "1.0",
-  "scenario_file": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\results\\sensitivity_suite\\scenarios\\known_targets_g19_t50_n50.csv",
-  "seed": 839171
+  "timing_clock": "time.perf_counter_ns"
 }

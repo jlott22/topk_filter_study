@@ -18,6 +18,7 @@ class RobotCounters:
     messages_delivered_to_robot: int = 0
     messages_dropped_to_robot: int = 0
     allocator_time_ns_samples: List[int] = field(default_factory=list)
+    allocator_solve_time_ns_samples: List[int] = field(default_factory=list)
     allocator_time_ns_pre_clue: List[int] = field(default_factory=list)
     allocator_time_ns_post_clue: List[int] = field(default_factory=list)
     candidate_filter_time_ns_samples: List[int] = field(default_factory=list)

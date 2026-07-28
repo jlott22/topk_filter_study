@@ -107,6 +107,14 @@ buzzer = None  # replaced after hardware initialization
 # Energy/Time metrics
 motor_time_ms = 0              # cumulative ms motors were commanded non-zero
 _motor_start_ms = None         # internal tracker for motor activity
+candidate_filter_calls = 0
+candidate_filter_time_us_total = 0
+candidate_filter_time_us_max = 0
+allocator_calls = 0
+allocator_time_us_total = 0
+allocator_time_us_max = 0
+allocator_solve_time_us_total = 0
+allocator_solve_time_us_max = 0
 
 def finalize_motor_time(now_ticks=None):
     """Ensure motor_time_ms captures any active span before sampling metrics."""
@@ -150,6 +158,37 @@ def busy_timer_value_ms():
     return _busy_accum_us // 1000
 
 
+def record_candidate_filter_time(start_us):
+    """Record one complete candidate discovery/ranking/truncation call."""
+    global candidate_filter_calls, candidate_filter_time_us_total
+    global candidate_filter_time_us_max
+    if _metrics_logged:
+        return
+    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
+    candidate_filter_calls += 1
+    candidate_filter_time_us_total += elapsed_us
+    if elapsed_us > candidate_filter_time_us_max:
+        candidate_filter_time_us_max = elapsed_us
+
+
+def record_allocator_time(start_us, filter_time_before_us):
+    """Record end-to-end allocation time and the portion excluding filtering."""
+    global allocator_calls, allocator_time_us_total, allocator_time_us_max
+    global allocator_solve_time_us_total, allocator_solve_time_us_max
+    if _metrics_logged:
+        return
+    elapsed_us = max(0, time.ticks_diff(time.ticks_us(), start_us))
+    filter_us = max(0, candidate_filter_time_us_total - filter_time_before_us)
+    solve_us = max(0, elapsed_us - filter_us)
+    allocator_calls += 1
+    allocator_time_us_total += elapsed_us
+    allocator_solve_time_us_total += solve_us
+    if elapsed_us > allocator_time_us_max:
+        allocator_time_us_max = elapsed_us
+    if solve_us > allocator_solve_time_us_max:
+        allocator_solve_time_us_max = solve_us
+
+
 def update_mem_headroom():
     """Refresh current free heap measurement and track the lowest observed value."""
     global mem_free_min
@@ -164,6 +203,10 @@ def reset_trial_metrics():
     global intersection_count, task_cell_replan_count, path_replan_count, collision_prevention_count
     global last_task_cell, collision_event_counted_since_move
     global motor_time_ms, _motor_start_ms, busy_ms, mem_free_min
+    global candidate_filter_calls, candidate_filter_time_us_total
+    global candidate_filter_time_us_max, allocator_calls
+    global allocator_time_us_total, allocator_time_us_max
+    global allocator_solve_time_us_total, allocator_solve_time_us_max
     global topic_1_rec, topic_2_rec, topic_3_rec, topic_4_rec, topic_5_rec
     global topic_1_sent, topic_2_sent, topic_3_sent, topic_4_sent, topic_5_sent
     global bytes_sent, bytes_received, _metrics_logged, _metrics_cache
@@ -178,6 +221,14 @@ def reset_trial_metrics():
     _motor_start_ms = None
     busy_ms = 0
     mem_free_min = gc.mem_free()
+    candidate_filter_calls = 0
+    candidate_filter_time_us_total = 0
+    candidate_filter_time_us_max = 0
+    allocator_calls = 0
+    allocator_time_us_total = 0
+    allocator_time_us_max = 0
+    allocator_solve_time_us_total = 0
+    allocator_solve_time_us_max = 0
 
     topic_1_rec = 0
     topic_2_rec = 0
@@ -277,6 +328,20 @@ def metrics_log():
     finalize_motor_time(now)
     elapsed_ms = time.ticks_diff(now, start)
     compute_time_ms = max(0, elapsed_ms - motor_time_ms)
+    candidate_filter_time_us_mean = (
+        candidate_filter_time_us_total / candidate_filter_calls
+        if candidate_filter_calls > 0 else 0.0
+    )
+    allocator_time_us_mean = (
+        allocator_time_us_total / allocator_calls if allocator_calls > 0 else 0.0
+    )
+    allocator_solve_time_us_mean = (
+        allocator_solve_time_us_total / allocator_calls if allocator_calls > 0 else 0.0
+    )
+    allocator_time_pct = (
+        allocator_time_us_total * 100.0 / (elapsed_ms * 1000)
+        if elapsed_ms > 0 else 0.0
+    )
     mem_total = gc.mem_alloc() + gc.mem_free()
     mem_used_peak = mem_total - mem_free_min
     cpu_util_pct = (busy_ms * 100) // elapsed_ms if elapsed_ms > 0 else 0
@@ -307,6 +372,19 @@ def metrics_log():
         "compute_time_ms": compute_time_ms,
         "busy_ms": busy_ms,
         "cpu_util_pct": cpu_util_pct,
+        "trial_time_ms": elapsed_ms,
+        "candidate_filter_calls": candidate_filter_calls,
+        "candidate_filter_time_us_total": candidate_filter_time_us_total,
+        "candidate_filter_time_us_mean": candidate_filter_time_us_mean,
+        "candidate_filter_time_us_max": candidate_filter_time_us_max,
+        "allocator_calls": allocator_calls,
+        "allocator_solve_time_us_total": allocator_solve_time_us_total,
+        "allocator_solve_time_us_mean": allocator_solve_time_us_mean,
+        "allocator_solve_time_us_max": allocator_solve_time_us_max,
+        "allocator_time_us_total": allocator_time_us_total,
+        "allocator_time_us_mean": allocator_time_us_mean,
+        "allocator_time_us_max": allocator_time_us_max,
+        "allocator_time_pct": allocator_time_pct,
         "mem_used_peak": mem_used_peak,
         "mem_free_min": mem_free_min,
         "task_cell_replans": task_cell_replan_count,
@@ -337,6 +415,19 @@ def metrics_log():
         "compute_time_ms",
         "busy_ms",
         "cpu_util_pct",
+        "trial_time_ms",
+        "candidate_filter_calls",
+        "candidate_filter_time_us_total",
+        "candidate_filter_time_us_mean",
+        "candidate_filter_time_us_max",
+        "allocator_calls",
+        "allocator_solve_time_us_total",
+        "allocator_solve_time_us_mean",
+        "allocator_solve_time_us_max",
+        "allocator_time_us_total",
+        "allocator_time_us_mean",
+        "allocator_time_us_max",
+        "allocator_time_pct",
         "mem_used_peak",
         "mem_free_min",
         "task_cell_replans",
@@ -1420,7 +1511,7 @@ def _hipc_bid_from_reference(cell, reference, normalizer=None):
     return -int((distance + 8.0 * (1.0 - probability)) * HIPC_BID_SCALE)
 
 
-def _hipc_candidates():
+def _hipc_candidates_impl():
     cells = []
     for y in range(GRID_SIZE):
         for x in range(GRID_SIZE):
@@ -1432,6 +1523,14 @@ def _hipc_candidates():
     if len(cells) > TOP_K_MAX_CELLS:
         del cells[TOP_K_MAX_CELLS:]
     return cells
+
+
+def _hipc_candidates():
+    started_us = time.ticks_us()
+    try:
+        return _hipc_candidates_impl()
+    finally:
+        record_candidate_filter_time(started_us)
 
 
 def _hipc_team_agents():
@@ -1747,12 +1846,22 @@ def _hipc_release_own_bundle_for_replan():
     _hipc_release_local_path()
 
 
-def pick_task_cell():
+def _pick_task_cell_impl():
     _hipc_reset_if_new_clue_information()
     _hipc_clear_invalid_or_completed_cells()
     _hipc_repair_after_consensus()
     _hipc_build_bundle()
     return hipc_path[0] if hipc_path else None
+
+
+def pick_task_cell():
+    started_us = time.ticks_us()
+    filter_time_before_us = candidate_filter_time_us_total
+    try:
+        return _pick_task_cell_impl()
+    finally:
+        record_allocator_time(started_us, filter_time_before_us)
+
 
 def next_serpentine_task_cell_in_band():
     """

@@ -78,9 +78,11 @@ or `NO_BID` released bid is not a wildcard. DGA publishes only owner prefixes
 whose first three cells changed, sends one empty clear when a previously sent
 owner disappears, and preserves omitted unchanged owner prefixes at receivers.
 
-`computational_performance.csv` reports allocator and candidate-filter call
-counts plus total, mean, and maximum host latency. Allocator percentage is
-reported relative to host trial runtime.
+`computational_performance.csv` reports candidate-filter time,
+allocator-solve time excluding that filter work, and end-to-end allocator time.
+The solve-only and end-to-end allocator columns include total, mean, median,
+95th-percentile, and maximum host latency. Allocator percentage is reported
+relative to host trial runtime.
 
 Each headless run also writes `computational_performance.csv`. It contains
 per-robot host-clock timing for allocator calls, including total, mean, median,

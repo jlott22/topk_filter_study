@@ -315,6 +315,7 @@ def validate_smoke_output(condition: Condition, out_dir: Path) -> dict[str, obje
         post_calls = _int(row, "allocator_calls_post_clue")
         candidate_calls = _int(row, "candidate_filter_calls")
         allocator_total = _float(row, "allocator_time_ms_total")
+        allocator_solve_total = _float(row, "allocator_solve_time_ms_total")
         candidate_total = _float(row, "candidate_filter_time_ms_total")
         host_runtime = _float(row, "host_trial_runtime_ms")
         host_runtimes.append(host_runtime)
@@ -324,10 +325,15 @@ def validate_smoke_output(condition: Condition, out_dir: Path) -> dict[str, obje
             "candidate-filter calls exceed allocator calls",
         )
         require(allocator_total >= 0.0, "negative allocator time")
+        require(allocator_solve_total >= 0.0, "negative allocator solve time")
         require(candidate_total >= 0.0, "negative candidate-filter time")
         require(
             candidate_total <= allocator_total + 1e-6,
             "candidate-filter time exceeds enclosing allocator time",
+        )
+        require(
+            abs(allocator_solve_total + candidate_total - allocator_total) < 1e-6,
+            "solve-only plus candidate-filter time does not equal allocator time",
         )
         require(host_runtime > 0.0, "host runtime is not positive")
         require(
@@ -339,6 +345,14 @@ def validate_smoke_output(condition: Condition, out_dir: Path) -> dict[str, obje
             require(
                 abs(_float(row, "allocator_time_ms_mean") - allocator_total / calls) < 1e-6,
                 "allocator mean does not equal total/calls",
+            )
+            require(
+                abs(
+                    _float(row, "allocator_solve_time_ms_mean")
+                    - allocator_solve_total / calls
+                )
+                < 1e-6,
+                "allocator solve mean does not equal total/calls",
             )
             require(
                 _float(row, "allocator_time_ms_median")
@@ -359,6 +373,9 @@ def validate_smoke_output(condition: Condition, out_dir: Path) -> dict[str, obje
         "host_trial_runtime_ms": host_runtimes[0],
         "allocator_time_ms_team_total": sum(
             _float(row, "allocator_time_ms_total") for row in compute_rows
+        ),
+        "allocator_solve_time_ms_team_total": sum(
+            _float(row, "allocator_solve_time_ms_total") for row in compute_rows
         ),
         "candidate_filter_time_ms_team_total": sum(
             _float(row, "candidate_filter_time_ms_total") for row in compute_rows

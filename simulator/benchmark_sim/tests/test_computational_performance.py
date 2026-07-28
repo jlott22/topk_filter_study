@@ -46,8 +46,14 @@ class ComputationalPerformanceTests(unittest.TestCase):
         robot.step(0.0, state.planner)
 
         self.assertEqual(len(robot.counters.allocator_time_ns_samples), 1)
+        self.assertEqual(len(robot.counters.allocator_solve_time_ns_samples), 1)
         self.assertEqual(len(robot.counters.allocator_time_ns_pre_clue), 1)
         self.assertGreaterEqual(robot.counters.allocator_time_ns_samples[0], 0)
+        self.assertGreaterEqual(robot.counters.allocator_solve_time_ns_samples[0], 0)
+        self.assertLessEqual(
+            robot.counters.allocator_solve_time_ns_samples[0],
+            robot.counters.allocator_time_ns_samples[0],
+        )
 
     def test_study_top_k_rates_resolve_to_expected_19_by_19_limits(self) -> None:
         expected = {
@@ -66,6 +72,7 @@ class ComputationalPerformanceTests(unittest.TestCase):
         state = self._state()
         counters = state.robots["00"].counters
         counters.allocator_time_ns_samples = [1_000_000, 2_000_000, 10_000_000]
+        counters.allocator_solve_time_ns_samples = [500_000, 1_000_000, 7_000_000]
         counters.allocator_time_ns_pre_clue = [1_000_000]
         counters.allocator_time_ns_post_clue = [2_000_000, 10_000_000]
         counters.candidate_filter_time_ns_samples = [1_000_000, 3_000_000]
@@ -89,6 +96,11 @@ class ComputationalPerformanceTests(unittest.TestCase):
         self.assertAlmostEqual(row["allocator_time_ms_median"], 2.0)
         self.assertAlmostEqual(row["allocator_time_ms_p95"], 10.0)
         self.assertAlmostEqual(row["allocator_time_ms_max"], 10.0)
+        self.assertAlmostEqual(row["allocator_solve_time_ms_total"], 8.5)
+        self.assertAlmostEqual(row["allocator_solve_time_ms_mean"], 8.5 / 3.0)
+        self.assertAlmostEqual(row["allocator_solve_time_ms_median"], 1.0)
+        self.assertAlmostEqual(row["allocator_solve_time_ms_p95"], 7.0)
+        self.assertAlmostEqual(row["allocator_solve_time_ms_max"], 7.0)
         self.assertAlmostEqual(row["allocator_time_pct"], 65.0)
         self.assertAlmostEqual(row["allocator_host_runtime_pct"], 65.0)
         self.assertEqual(row["candidate_filter_calls"], 2)

@@ -293,8 +293,9 @@ Each Pololu also writes local robot metrics, including:
 - motor time
 - CPU utilization
 - memory high-water metrics
-- candidate-filter call count, total time, and maximum time
-- allocator solve time, excluding measured candidate-filter time
+- candidate-filter call count and total, mean, and maximum time
+- allocator solve time excluding measured candidate-filter time, with total,
+  mean, and maximum
 - allocator call count and total, mean, and maximum allocation-decision time
 - allocator time as a percentage of trial wall time
 - mean step time, calculated as trial wall time divided by robot step count
@@ -305,7 +306,8 @@ Each Pololu also writes local robot metrics, including:
 Candidate-filter and allocator times are reported in microseconds. The onboard
 CSV fields are `candidate_filter_calls`, `candidate_filter_time_us_total`,
 `candidate_filter_time_us_mean`, `candidate_filter_time_us_max`,
-`allocator_solve_time_us_total`, `allocator_calls`,
+`allocator_solve_time_us_total`, `allocator_solve_time_us_mean`,
+`allocator_solve_time_us_max`, `allocator_calls`,
 `allocator_time_us_total`, `allocator_time_us_mean`,
 `allocator_time_us_max`, `allocator_time_pct`, `trial_time_ms`, and
 `mean_step_time_ms`. Every onboard metrics row also records the deployed

@@ -25,6 +25,7 @@ KNOWN_VISIT_ROOT = REPO_ROOT.parent / "dcta_benchmark_sim"
 DEFAULT_RUN_ROOT = REPO_ROOT / "results" / "sensitivity_suite"
 
 TRIALS_PER_CONDITION = 50
+MULTITARGET_TRIALS_PER_CONDITION = 100
 DEFAULT_WORKERS = 12
 DEBUG_MAX_EVENTS = 20_000
 COMMITMENT_HORIZON = 3
@@ -52,7 +53,6 @@ ALGORITHMS = (
 )
 
 EXPECTED_CONDITIONS = 324
-EXPECTED_TRIALS = EXPECTED_CONDITIONS * TRIALS_PER_CONDITION
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ class Environment:
     comm_model: str = "ideal"
     comm_level: str = ""
     target_count: int = 1
+    trials_per_condition: int = TRIALS_PER_CONDITION
 
 
 SCALE_ENVIRONMENTS = (
@@ -97,12 +98,16 @@ COMM_ENVIRONMENTS = (
 MULTITARGET_ENVIRONMENTS = (
     Environment(
         "multitarget", "multitarget_g19_r4_t50", "known_visit", 19, 4,
-        "known_targets_g19_t50_n50.csv", "known_targets_g19_t50",
+        "known_targets_g19_t50_n100.csv", "known_targets_g19_t50",
         target_count=TARGET_COUNT,
+        trials_per_condition=MULTITARGET_TRIALS_PER_CONDITION,
     ),
 )
 
 ALL_ENVIRONMENTS = SCALE_ENVIRONMENTS + COMM_ENVIRONMENTS + MULTITARGET_ENVIRONMENTS
+EXPECTED_TRIALS = sum(
+    environment.trials_per_condition for environment in ALL_ENVIRONMENTS
+) * len(ALGORITHMS) * len(TOP_K_RATES)
 
 MANIFEST_FIELDS = (
     "condition_index", "condition_id", "suite", "environment", "runner",
@@ -224,7 +229,11 @@ def write_clue_scenarios(
             writer.writerow(row)
 
 
-def write_known_target_scenarios(path: Path, seed: int) -> None:
+def write_known_target_scenarios(
+    path: Path,
+    seed: int,
+    trial_count: int = MULTITARGET_TRIALS_PER_CONDITION,
+) -> None:
     starts = edge_even_starts(19, 4)
     eligible = [
         (x, y)
@@ -244,7 +253,7 @@ def write_known_target_scenarios(path: Path, seed: int) -> None:
         )
         writer = csv.writer(handle)
         writer.writerow(header)
-        for trial_id in range(TRIALS_PER_CONDITION):
+        for trial_id in range(trial_count):
             targets = rng.sample(eligible, TARGET_COUNT)
             writer.writerow([trial_id, *[value for cell in targets for value in cell]])
 
@@ -268,15 +277,23 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
 
 def validate_scenario_files(scenario_dir: Path) -> None:
     specs = (
-        ("clue_g19_n50.csv", 19, (2, 4, 8), "clue"),
-        ("clue_g14_n50.csv", 14, (4,), "clue"),
-        ("clue_g28_n50.csv", 28, (4,), "clue"),
-        ("known_targets_g19_t50_n50.csv", 19, (4,), "known"),
+        ("clue_g19_n50.csv", 19, (2, 4, 8), "clue", TRIALS_PER_CONDITION),
+        ("clue_g14_n50.csv", 14, (4,), "clue", TRIALS_PER_CONDITION),
+        ("clue_g28_n50.csv", 28, (4,), "clue", TRIALS_PER_CONDITION),
+        (
+            "known_targets_g19_t50_n100.csv",
+            19,
+            (4,),
+            "known",
+            MULTITARGET_TRIALS_PER_CONDITION,
+        ),
     )
-    for filename, grid_size, robot_counts, kind in specs:
+    for filename, grid_size, robot_counts, kind, expected_rows in specs:
         rows = read_csv_rows(scenario_dir / filename)
-        if len(rows) != TRIALS_PER_CONDITION:
-            raise RuntimeError(f"{filename}: expected 50 rows, found {len(rows)}")
+        if len(rows) != expected_rows:
+            raise RuntimeError(
+                f"{filename}: expected {expected_rows} rows, found {len(rows)}"
+            )
         reserved = set().union(
             *(edge_even_starts(grid_size, count) for count in robot_counts)
         )
@@ -367,7 +384,7 @@ def build_command(
             "--algorithm", clue_import,
             "--algorithm-name", algorithm_name,
             "--comm-model", environment.comm_model,
-            "--max-trials", str(TRIALS_PER_CONDITION),
+            "--max-trials", str(environment.trials_per_condition),
             "--seed", str(seed),
             "--out-dir", str(out_dir),
             "--grid-size", str(environment.grid_size),
@@ -394,7 +411,7 @@ def build_command(
         "--algorithm", known_import,
         "--algorithm-name", algorithm_name,
         "--comm-model", environment.comm_model,
-        "--max-trials", str(TRIALS_PER_CONDITION),
+        "--max-trials", str(environment.trials_per_condition),
         "--seed", str(seed),
         "--out-dir", str(out_dir),
         "--grid-size", str(environment.grid_size),
@@ -479,7 +496,7 @@ def build_manifest_rows(run_root: Path) -> list[dict[str, object]]:
                     "scenario_file": str(scenario_path),
                     "scenario_sha256": scenario_hash,
                     "seed": seed,
-                    "num_trials": TRIALS_PER_CONDITION,
+                    "num_trials": environment.trials_per_condition,
                     "out_dir": str(out_dir),
                     "working_directory": str(cwd.resolve()),
                     "weight": work_weight,
@@ -521,8 +538,9 @@ def prepare(run_root: Path) -> None:
         SCENARIO_SEED + 28 * 1009,
     )
     write_known_target_scenarios(
-        scenario_dir / "known_targets_g19_t50_n50.csv",
+        scenario_dir / "known_targets_g19_t50_n100.csv",
         SCENARIO_SEED + 50 * 1009,
+        MULTITARGET_TRIALS_PER_CONDITION,
     )
     validate_scenario_files(scenario_dir)
 
@@ -539,7 +557,8 @@ def prepare(run_root: Path) -> None:
         "benchmark_simulator_root": str(SIMULATOR_ROOT),
         "known_visit_simulator_root": str(KNOWN_VISIT_ROOT),
         "conditions": len(rows),
-        "trials_per_condition": TRIALS_PER_CONDITION,
+        "default_trials_per_condition": TRIALS_PER_CONDITION,
+        "multitarget_trials_per_condition": MULTITARGET_TRIALS_PER_CONDITION,
         "expected_trials": EXPECTED_TRIALS,
         "default_workers": DEFAULT_WORKERS,
         "top_k_rates": list(TOP_K_RATES),

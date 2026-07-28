@@ -99,6 +99,7 @@ def build_computational_performance_rows(
     for rid, robot in sorted(state.robots.items()):
         counters = robot.counters
         overall = _runtime_stats_ms(counters.allocator_time_ns_samples)
+        solve = _runtime_stats_ms(counters.allocator_solve_time_ns_samples)
         candidate_filter = _runtime_stats_ms(counters.candidate_filter_time_ns_samples)
         pre_clue = _runtime_stats_ms(counters.allocator_time_ns_pre_clue)
         post_clue = _runtime_stats_ms(counters.allocator_time_ns_post_clue)
@@ -113,6 +114,11 @@ def build_computational_performance_rows(
             "allocator_time_ms_median": overall["median"],
             "allocator_time_ms_p95": overall["p95"],
             "allocator_time_ms_max": overall["max"],
+            "allocator_solve_time_ms_total": solve["total"],
+            "allocator_solve_time_ms_mean": solve["mean"],
+            "allocator_solve_time_ms_median": solve["median"],
+            "allocator_solve_time_ms_p95": solve["p95"],
+            "allocator_solve_time_ms_max": solve["max"],
             "allocator_time_pct": (
                 overall["total"] * 100.0 / host_runtime_ms
                 if host_runtime_ms > 0.0

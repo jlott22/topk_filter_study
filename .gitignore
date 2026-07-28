@@ -51,3 +51,7 @@ Thumbs.db
 /simulator/runs/**/_trial_journal.jsonl
 /simulator/runs/**/_FAILED.txt
 /simulator/runs/**/_COMPLETE.txt
+
+# Generated hardware replay captures and partial sensitivity shards remain local.
+/results/allocator_replay/
+/results/sensitivity_suite/_cv100/

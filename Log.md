@@ -1617,3 +1617,756 @@ algorithm:
   remaining allocation time before it processes the buffered target alert.
 - Do not treat the robot-local timing fields as physically validated until
   these checks pass on connected hardware.
+
+## 2026-07-26 - Paper-ready Top-K experiment and results text
+
+- Added `results/PAPER_READY_TOPK_EXPERIMENT_AND_RESULTS.txt` as a standalone,
+  copy-and-pasteable description of the completed primary simulation,
+  sensitivity suite, and 50-target experiment.
+- Included the paired compute/mission tradeoff, confidence intervals,
+  sensitivity trend checks, failure disclosures, supported claims,
+  unsupported claims, limitations, compact Methods and Results paragraphs,
+  and source-data provenance.
+- Explicitly separated completed results from the unrun 3%, 1%, K = 1, and
+  RP2040 experiment proposals.
+
+### 2026-07-26 - Separate allocator and candidate-filter timing
+
+- Added timing to all six active, known-bootable `hardware/Pololu_*.py`
+  programs without changing their allocator bodies. Each onboard row now
+  reports candidate-filter calls and total/mean/maximum microseconds,
+  allocator-solve total/mean/maximum microseconds with filter work excluded,
+  and end-to-end allocator calls, total/mean/maximum microseconds, and trial
+  percentage.
+- Extended the local clue/coverage simulator's
+  `computational_performance.csv` with `allocator_solve_time_ms_*` columns.
+  Existing `allocator_time_ms_*` remains end-to-end, while
+  `candidate_filter_time_ms_*` remains the complete candidate operation.
+- Added the same three-way measurement to the sibling collaborative
+  known-visit simulator with per-robot columns in `robot_performance.csv` and
+  team totals in `system_performance.csv`. This was a metrics-only change to
+  the known-visit repository.
+- Verified all six Pololu sources compile and retain byte-for-byte-equivalent
+  allocator/candidate AST bodies inside the new wrappers. The clue simulator
+  passed 147 tests, the known-visit simulator passed 17 tests, the sensitivity
+  suite passed 4 tests, and a one-trial known-visit CBAA smoke run produced
+  nonzero filter, solve-only, and end-to-end allocator timings.
+
+## 2026-07-27 - Collaborative rerun and Pololu-authoritative HIL campaign
+
+### Completed 100-scenario collaborative simulation
+
+- Replaced the prior 50-scenario collaborative-visit results with 100
+  scenarios per condition for all six algorithms and six standard Top-K
+  levels (5%, 10%, 25%, 50%, 75%, and 100%): 36 conditions and 3,600 mission
+  runs.
+- The scenario cohort uses seed `20311176`. Trials 0-49 are byte-for-byte the
+  prior seeded rows and trials 50-99 are continued draws from the same random
+  generator. The 100-row scenario file is
+  `results/sensitivity_suite/scenarios/known_targets_g19_t50_n100.csv` with
+  SHA-256
+  `7537b0408132e9d6eaeb5544f867c6647609c309f1aa471ac5b8022e39405309`.
+- The runner used `floor(logical_processors * 0.75)` workers. The recorded
+  machine exposed 22 logical processors, so the campaign rule selected 16
+  workers.
+- `results/sensitivity_suite/_cv100/progress.json` records the campaign as
+  complete with 3,600 jobs. The installed canonical results are under
+  `results/sensitivity_suite/raw/multitarget/multitarget_g19_r4_t50`.
+- Collaborative `system_performance.csv` rows now include team maximums
+  derived from robot-level rows:
+  `allocator_time_ms_team_max`,
+  `allocator_solve_time_ms_team_max`, and
+  `candidate_filter_time_ms_team_max`. These accompany the existing team
+  totals and make the system schema consistent with the Bayesian timing
+  outputs.
+- Timing semantics remain:
+  end-to-end allocator time includes filtering; candidate-filter time is the
+  nested subset; allocator-exclusive/solve time is allocator time minus
+  nested filter time. The three values must not be summed.
+
+### Separate replay subsystem and live authority boundary
+
+- Added the top-level `allocator_replay/` subsystem and dedicated results
+  paths without editing or importing the active `hardware/Pololu_*.py`
+  programs. Those files were read-only references. The benchmark simulator
+  repositories were not behaviorally modified for HIL.
+- Preserved the earlier offline trace/replay implementation and added a
+  separate live Pololu-authoritative path:
+
+  ```text
+  simulator reaches choose_goal
+  -> current allocator/robot state is sent over USB
+  -> Pololu runs and times choose_goal
+  -> Pololu returns goal, allocation messages, and mutable state
+  -> simulator applies that response and advances
+  ```
+
+- The desktop simulator does not run a shadow `choose_goal()` during the
+  campaign. It continues to own motion, sensing, environment events,
+  communication delivery, and allocator callbacks outside `choose_goal()`.
+  A complete emulator mission verified that the returned hardware-interface
+  goal changes the subsequent simulator path: Bayesian CBAA K=1 trial 0
+  completed with 426 total team steps, maximum 134 steps for one robot, and
+  1,549 allocator calls in about 27.6 host seconds.
+- The device timer uses `ticks_us()` only around `choose_goal()`. Fixture
+  encoding/decoding, USB transfer, journaling, and parity checks are outside
+  the timed region. Each call returns:
+  allocator, candidate-filter, and allocator-exclusive microseconds; filter
+  invocation count; candidates before/after filtering; heap before/after;
+  goal; outbound messages; mutable robot state; and mutable allocator state.
+- USB results use bounded ASCII chunks with sequence/CRC validation. No full
+  mission trace is retained in host memory.
+- Host commands are `hil-prepare`, `hil-run`, `hil-status`, and `hil-report`.
+  Execution is append-only and resumable. If the host stops mid-trial, that
+  trial restarts from its historical scenario with a new generation ID; the
+  partial generation remains auditable but is excluded from representative
+  summaries.
+- Reports regenerate raw-call, robot-trial, system-trial, and condition CSVs.
+  They include sample sizes and total, mean, median, p95, and maximum values
+  for allocator, filter, and allocator-exclusive time, plus filter/call-path
+  counts, `total_team_steps`, `max_steps_any_robot`, completion state, device
+  identity, and scenario/source hashes.
+- A Windows commit-memory guard prevents new trials from launching before
+  virtual-memory commitment reaches the configured unsafe threshold. This
+  was added after the earlier offline hardware replay process ended while the
+  host was under abnormal memory/commit pressure.
+
+### HIL testing matrix and device scheduling
+
+- Algorithms: ACBBA, CBAA, DGA, DMCHBA, HIPC, and PI.
+- Bayesian levels: K=1, 1%, 3%, 5%, 10%, 25%, 50%, 75%, and 100%;
+  25 historical trials per condition. This is 54 conditions and 1,350 mission
+  runs.
+- Collaborative levels: K=1, K=2, 5%, 10%, 25%, 50%, 75%, and 100%;
+  10 historical trials per condition. This is 48 conditions and 480 mission
+  runs.
+- Total planned matrix: 102 conditions and 1,830 mission runs.
+- Work is partitioned at the complete-condition level. One Pololu owns one
+  mission x algorithm x Top-K condition at a time. All calls within a trial
+  stay sequential and on the same Pololu. When a device finishes, it receives
+  the predicted-longest remaining unassigned condition so the two device
+  queues finish as close together as practical.
+- A disconnected device's active condition pauses and remains pinned to its
+  stable `machine.unique_id()`. Reassignment is explicit and is logged as a
+  mixed-device condition.
+- Reproducible allocator timeout, memory, or invalid-output failures are
+  confirmed with up to three attempts. Only the affected condition stops.
+  USB transport failures are retried without counting as timing attempts.
+
+### Initial differences between the two connected Pololus
+
+| Property | COM12 | COM13 |
+|---|---:|---:|
+| Stable device ID | `e4621cb30b2b352f` | `e4621cb30b43372f` |
+| Initial MicroPython | 1.22.1 | 1.24.0 |
+| Initial MPY ABI | 4614 | 4870 |
+| CPU clock | 125 MHz | 125 MHz |
+| Initial repeated CBAA K=1 allocator median | 224.250 ms | 241.573 ms |
+| Initial repeated end-to-end USB-call median | 2.101 s | 2.489 s |
+
+- Before firmware alignment, both boards returned the same goal `(0, 9)`,
+  one message, the same state shape, and a 50-to-1 candidate reduction, but
+  allocator medians differed by about 8% and end-to-end call medians differed
+  by about 18%. This exceeded the 5% cross-device calibration rule, so the
+  boards were not accepted as a combined campaign pair.
+
+### COM12 firmware alignment and filesystem preservation
+
+- Before changing COM12, copied and hashed its entire `POLOLU 03` filesystem:
+  178 files, 19 subdirectories, and 1,690,348 bytes. The verified backup is
+  `results/allocator_replay/device_backups/`
+  `e4621cb30b2b352f_pre_v124_20260727T2300Z`.
+- Installed the exact firmware used by COM13:
+  `POLOLU_3PI_2040_ROBOT-20241025-v1.24.0.uf2`, SHA-256
+  `4fc62cff903000079ea0cd462c1b6e5f3e2a8f1ad3608e81439a52a8b22a8364`.
+- Restored all 178 original COM12 files, including its original `main.py`,
+  algorithms, logs, hidden files, trash, and volume metadata. A final
+  file-set, byte-count, and SHA-256 comparison had zero missing, extra, or
+  mismatched original files.
+- Deployed replay-only modules without changing `main.py`. Both devices now
+  report MicroPython 1.24.0, MPY ABI 4870, 125 MHz, firmware SHA-256
+  `c64e31b161421148abdd87a4eea541048456e8e99e6db08407499b0dfa7bfb7c`,
+  replay build `micropython_1_24_o0_5fc60d72663c`, and module-set SHA-256
+  `d7d86507c8b2a48cfde5a7e07172e8625a6ffccd8b86cd5bd6629934958756fd`.
+
+### Post-alignment physical smoke and calibration metrics
+
+| Metric | COM12 | COM13 |
+|---|---:|---:|
+| Five-call allocator median | 239.452 ms | 239.971 ms |
+| Five-call filter median | 226.288 ms | 226.549 ms |
+| Five-call end-to-end USB median | 2.038 s | 2.045 s |
+| Preflight heap at identity check | 166,496 B | 166,896 B |
+| Preflight free heap after module check | 135,808 B | 136,208 B |
+
+- The post-alignment allocator-median spread was 0.22%. All ten calls
+  completed and returned identical goal/message/candidate outputs.
+- Joint calibration used two repetitions per reference fixture:
+  Bayesian CBAA 5% medians were 3,096.5 us and 3,190.5 us (about 3.0% spread);
+  collaborative CBAA 5% medians were 244,281.0 us and 244,894.5 us (about
+  0.25% spread). Both are within the 5% rule.
+- Joint preflight passed matching firmware, implementation, build, module
+  hashes, and clock checks. Both boards passed safe REPL exit. Replay modules
+  reported that motors and sensors were never initialized.
+- One detailed authoritative collaborative CBAA K=1 call on each device
+  reduced 50 candidates to 1, invoked the filter once, returned one allocator
+  message and goal `(0, 9)`, and reported about 13-14 ms allocator-exclusive
+  time. Most of that call's approximately 240 ms allocator time was the
+  approximately 226 ms candidate filter.
+
+### Observed resource limits and failure-adjusted duration
+
+- Both boards reproduced a Bayesian DGA 5% state-load `MemoryError` while
+  allocating 1,024 bytes. Additional probes reproduced the same failure at 1%
+  and 3%. Bayesian DGA K=1 remains unclassified because its archived smoke
+  trace is incomplete.
+- Both boards exceeded 30 seconds on the collaborative DGA 5% smoke fixture.
+  Additional K=1 and K=2 probes also exceeded 30 seconds. Because increasing K
+  cannot reduce this DGA workload, all eight collaborative DGA conditions are
+  expected to stop early.
+- The earlier offline physical replay had already classified Bayesian DGA 75%
+  and 100%, and Bayesian DMCHBA 75% and 100%, as reproducible
+  `memory_unusable` conditions. Bayesian DGA 50% was active with zero completed
+  fixtures when that host process ended.
+- Current planning therefore expects at least 18 early-stopped conditions:
+  all eight collaborative DGA levels; Bayesian DGA 1% through 100% (eight
+  levels); and Bayesian DMCHBA 75%/100%. Bayesian DGA K=1 is retained
+  conservatively until the live campaign classifies it.
+- After excluding those expected early stops, the clue-qualified cohort is
+  estimated at 84 conditions, 1,500 completed mission runs, and about 249,763
+  hardware allocator calls. At the observed approximately 2.04 seconds per
+  representative USB round trip, the two-device theoretical floor is about
+  2.95 continuous days. The practical planning range is 4-6 days, with seven
+  days reserved for larger states, higher-K compute, retries, and reconnects.
+  Pololu-authoritative decisions can change mission paths and therefore the
+  final call count.
+
+### Clue-qualified Bayesian cohort
+
+- Audited all 500 historical Bayesian trial IDs across the 36 available
+  standard Top-K algorithm conditions. A clue was recorded in every condition
+  for 495 trials.
+- Clue discovery alone was insufficient for the intended allocator benchmark:
+  four trials in the first sample (`26`, `36`, `448`, and `497`) recorded a
+  clue but zero post-clue allocator calls. Eligibility was therefore defined
+  as both:
+  1. clue found in every available historical condition; and
+  2. at least three post-clue allocator calls in every such condition.
+- There are 379 eligible trials. Applying the unchanged Bayesian sampling
+  seed `20260727` selected:
+  `7, 12, 32, 45, 50, 56, 67, 80, 94, 108, 127, 132, 164, 166, 178, 216,`
+  `226, 233, 274, 313, 358, 371, 388, 398, 424`.
+  Every selected trial has at least four post-clue calls in its weakest
+  historical condition.
+- Collaborative selection remains a ten-trial fixed-seed sample from trials
+  0-99 using seed `20311176`.
+- The executable immutable campaign is
+  `results/allocator_replay/hil_campaigns/`
+  `pololu_authoritative_clue_qualified`. The older
+  `pololu_authoritative_initial` manifest is retained only as a superseded
+  audit record and must not be executed.
+- The final allocator replay/HIL suite passed all 17 desktop tests, covering
+  authoritative state and message round trips, hardware authority over the
+  simulator path, chunking, timing fields, timeout/memory handling,
+  one/two/three-device scheduling, disconnect/resume, report regeneration,
+  deterministic clue-qualified selection, and rejection of an insufficient
+  eligible population.
+- No HIL mission trial has started. The clue-qualified schedule remains
+  `prepared` with 102 pending conditions and 0 of 1,830 planned runs complete.
+
+### Campaign launch and pre-timing failure handling
+
+- Started the immutable `pololu_authoritative_clue_qualified` campaign on
+  COM12 and COM13 on 2026-07-27. The host runner is a hidden, resumable
+  process with append-only per-device journals under the campaign directory.
+- The first DGA/100% call on COM12 and a later DMCHBA/100% call on COM13
+  returned structured device failures before a `TIMED` packet could be
+  emitted. The host initially mislabeled these as USB `transport_error`
+  events and paused both workers even though Windows still saw both serial
+  ports.
+- Updated only the replay host transport (not any original Pololu program or
+  benchmark simulator) so a chunked authoritative failure that precedes the
+  timed boundary is consumed and classified by its real device failure type.
+  Added and passed a loopback regression test for this exact protocol path.
+  The original generation-1 transport records remain in the journals for
+  auditability and are excluded from completed-run summaries.
+- Resumed the same schedule. COM12 then reproduced DGA/100% memory failure
+  three times, stopped only that condition as `memory_unusable`, reproduced
+  DGA/75% memory failure three times, stopped that condition, and was
+  automatically assigned Bayesian DMCHBA/75%. COM13 continued Bayesian
+  DMCHBA/100%. This verified condition-level failure isolation and dynamic
+  next-condition scheduling on both physical boards.
+
+### HIL campaign paused: feasibility classifications are not valid
+
+- Paused the Pololu-authoritative campaign after the high-K failure pattern
+  contradicted known native Pololu behavior. Stopped the hidden host process,
+  returned both interrupted conditions to `pending`, marked both devices and
+  the central schedule `paused`, and confirmed that COM12 and COM13 remained
+  discoverable. No campaign runs were resumed.
+- At pause time the schedule had zero completed trials, 75 pending
+  conditions, and 27 stopped conditions: 22 labeled `memory_unusable`, four
+  labeled `timing_unusable_30s`, and collaborative DGA 75% labeled
+  `hardware_call_failed`. These labels must be treated as preliminary HIL
+  failures, not native allocator feasibility results.
+- The first Bayesian CBAA call state was 36,762 serialized bytes. Its
+  361-cell `target_p` map was serialized twice, once under the robot views and
+  once under the belief object, at 17,310 bytes per copy. Together those
+  redundant copies were about 94% of the fixture. Native CBAA instead keeps
+  compact persistent `array('f')` probability maps and never reconstructs
+  them from USB on every allocator call.
+- All three CBAA 50%, 75%, and 100% campaign attempts failed before
+  `choose_goal()` at the same 4,089-byte `PEND` JSON decode. Thus none of
+  those failures measured CBAA allocator memory.
+- Ran two isolated motor-free COM12 diagnostics without changing deployed
+  files. Removing the redundant belief copy and reducing transfer batches
+  allowed the same Bayesian CBAA 100% state to execute:
+  - the first pre-clue call completed in 2,883 us;
+  - the first post-clue full allocation completed in 1,843,635 us, including
+    552,178 us of candidate filtering and 1,291,457 us allocator-exclusive;
+  - desktop and Pololu both selected `(2, 11)`, both reported 355 candidates
+    before and after the 100% filter, and the Pololu retained 32,528 bytes of
+    heap after the call.
+  This proves CBAA 100% is feasible for that actual simulator allocator call
+  and that the campaign's CBAA memory classifications were replay packaging
+  artifacts.
+- The current HIL protocol creates and restores a new allocator and
+  `ReplayRobot` from a complete snapshot for every call, duplicates immutable
+  state, and builds a complete JSON post-state in memory before chunking it.
+  Native Pololu programs keep one robot's state resident and exchange only
+  incremental peer/allocation messages. The HIL output path also produced
+  memory failures after 18 calls had already completed `choose_goal()`;
+  those cannot be interpreted as allocator failures.
+- The host's 30-second deadline begins after the device sends `START`, but
+  `START` is sent before allocator construction, robot reconstruction, state
+  restoration, and garbage collection. The recorded microsecond metric times
+  only `choose_goal()`, but the feasibility timeout currently covers more
+  than `choose_goal()`. Existing timing classifications therefore also
+  require retesting with a corrected boundary.
+- Collaborative DGA 75% failed three times on
+  `route[start:end] = reversed(route[start:end])`. CPython accepts the
+  iterator for slice assignment, while MicroPython 1.24 requires a tuple or
+  list. The generated port copied this expression unchanged, and the current
+  build transform does not rewrite it. Native `Pololu_DGA.py` uses a
+  different in-place reversal and does not contain this expression. The
+  `hardware_call_failed` row is a replay-port compatibility defect, not a DGA
+  feasibility result.
+- The current `hardware/Pololu_*.py` programs and HIL allocator ports are not
+  equivalent execution targets. The hardware README explicitly labels the
+  native programs as temporary known-bootable older benchmark logic rather
+  than simulator-parity implementations. For example, native DGA uses a
+  population of 12 and eight iterations per trigger, while both simulator
+  DGA implementations used by HIL use a population of 30 and 25 iterations.
+  Native probability maps use float32 arrays; the simulator-parity replay uses
+  binary64 values. Native success therefore does not establish that every
+  full simulator allocator fits unchanged, although the corrected CBAA probe
+  shows that HIL overhead—not CBAA—caused the observed CBAA failures.
+
+## 2026-07-27 corrected native persistent Pololu HIL implementation
+
+### Prior campaign invalidation
+
+- The paused `pololu_authoritative_clue_qualified` campaign is diagnostic
+  evidence only. It now contains `INVALID_FOR_ANALYSIS.json`; its append-only
+  journals are preserved, but regenerated reports accept zero attempts,
+  trials, or conditions as representative hardware results.
+- The earlier `pololu_authoritative_initial` manifest is also superseded.
+  Neither campaign may be resumed for analysis. The false memory/timing labels
+  described above came from full-snapshot setup, output packaging, and a
+  misplaced timeout boundary rather than the native allocator call.
+
+### Native code that is now timed
+
+- Added a separate implementation under `allocator_replay`; no
+  `hardware/Pololu_*.py`, archived allocator, benchmark simulator, or device
+  `main.py` file was edited.
+- Bayesian HIL and the stationary/moving physical adapter now instantiate the
+  same complete MicroPython allocator factory. CBAA uses normalized
+  probability scoring, ACBBA uses its native ACBBA scoring, and DMCHBA uses
+  the current scoring. Bayesian DGA retains the study search size of 30 plans
+  and 25 generations and the same five mutation strategies. Memory-oriented
+  packed plans change representation, not the search operations or scoring.
+- Collaborative visit now has a practical, motor-free native 50-target
+  implementation for CBAA, ACBBA, PI, HIPC, DMCHBA, and DGA, organized under
+  `allocator_replay/device/native/collaborative`. It follows the same
+  MicroPython design style as a deployable Pololu allocator and uses the same
+  complete factory for HIL and a future physical wrapper.
+- Floating-point representation was not forced to match the desktop
+  simulator. The benchmark target is instead consistent native execution:
+  the HIL call and a later real-testbed call use the same deployed allocator
+  modules and strategies.
+
+### Corrected persistent call boundary
+
+- The simulator sends trial configuration once and maintains one resident
+  robot/allocator context per Pololu. When the simulated scheduler switches
+  robots, compact allocator-owned state is restored outside timing; immutable
+  environment state is not echoed in every result.
+- `PSETUP` completes and the board returns `PCALL_READY` before the host starts
+  the 30-second allocator deadline. `PTIME` then measures only
+  `choose_goal()` with `ticks_us()`. The board emits `PTIMED` before messages,
+  state serialization, journaling, or USB transfer.
+- Every call records total allocator time, cumulative nested candidate-filter
+  time, allocator-exclusive time, filter invocation count, candidates before
+  and after filtering, call-path classification, and free heap before and
+  after the timed call.
+- Setup, timed allocator, output serialization, and USB transport failures are
+  journaled as separate phases. Only reproducible failures in the timed
+  allocator classify a condition as `memory_unusable` or
+  `timing_unusable_30s`; packaging failures can no longer masquerade as
+  allocator failures.
+- The Pololu's returned goal, allocation messages, and mutable allocator state
+  drive the next simulator step. The desktop allocator does not shadow or
+  override `choose_goal()`.
+
+### MicroPython compatibility and bounded state transfer
+
+- Rewrote generated DGA iterator slice assignment and generator-to-array
+  extension into MicroPython-compatible list/append operations. Also removed
+  CPython-only tuple `startswith` and class `__mro__` assumptions.
+- Bayesian DGA initially completed its K=1 timed solve but failed afterward
+  while copying its RNG state. The exact 2,500-byte request was the
+  625-pointer temporary created by `Random.getstate()`. The output worker now
+  streams 24 RNG words per bounded byte field without calling `getstate()`,
+  then reconstructs the ordinary flat MT19937 state before the next native
+  call.
+- DGA populations are sent one plan at a time. Packed plan cells are also
+  component-split into bounded chunks so higher Top-K state never requires one
+  large post-call JSON allocation. Context-switch tests prove that the next
+  decision and resulting state match an uninterrupted resident context.
+
+### Final verification and immutable campaign
+
+- The complete desktop suite passes 68 of 68 tests. Coverage includes all 12
+  native mission/algorithm engines using captured historical states,
+  authoritative path changes, RNG and packed-plan context restoration, timing
+  boundaries, output chunking, invalid goals/state, timeout confirmation,
+  one/two/three-device scheduling, disconnect/resume, journal deduplication,
+  report regeneration, and source/scenario provenance.
+- Both boards passed physical preflight on replay build
+  `micropython_1_24_o0_b95d70ed28a7`, deployed module-set SHA-256
+  `b719825eb3f600714d172d91cb56e43cbc49cbf084e3848d5a846994e7384461`.
+  Firmware, module hashes, 125 MHz clock, and implementation match. All 24
+  restore/delta smokes completed, deterministic K=1 parity passed for both
+  missions, motors and sensors remained uninitialized, and both devices
+  safely exited to and restarted from REPL.
+- Five repeated persistent CBAA calibration calls per board differed by at
+  most 0.83%, within the 5% combination rule. Bayesian DGA K=1 completed its
+  full solve and state return on both boards in about 20.0 seconds; this
+  indicates that larger DGA Top-K settings may legitimately reach the
+  30-second timed cutoff.
+- The immutable schema-v2 campaign is
+  `results/allocator_replay/hil_campaigns/pololu_native_persistent_v2`.
+  Manifest SHA-256 is
+  `dd32b7fc67bb05dbbb211dd1337748fd29c1a1018eed9ccd3905f762874b7d09`.
+  It binds the exact device build, all allocator/host/simulator sources, and
+  every historical scenario hash; execution fails closed if any source,
+  scenario, or connected build drifts.
+- Bayesian uses the clue-qualified trial IDs
+  `7, 12, 32, 45, 50, 56, 67, 80, 94, 108, 127, 132, 164, 166, 178, 216,`
+  `226, 233, 274, 313, 358, 371, 388, 398, 424` for every algorithm and
+  K=1/1%/3%/5%/10%/25%/50%/75%/100%.
+- Collaborative visit uses historical trial IDs
+  `10, 12, 14, 26, 30, 31, 32, 41, 49, 74` for every algorithm and
+  K=1/K=2/5%/10%/25%/50%/75%/100%.
+- The matrix contains 102 complete condition jobs and 1,830 mission runs.
+  Conditions are assigned dynamically to COM12 (`e4621cb30b2b352f`) and
+  COM13 (`e4621cb30b43372f`), one entire condition at a time per device,
+  longest predicted work first. Trials and calls remain sequential and pinned
+  to one board; journals make interruption and restart idempotent.
+
+### Clean-VM correction and final campaign generation
+
+- The preceding `pololu_native_persistent_v2` campaign is invalid for
+  analysis. Second-robot restores failed during `PDATA`/`PEND`, before
+  `PCALL_READY`; all 28 raw attempts are retained as diagnostics and zero are
+  accepted. `PCLEAR` now releases the prior runtime before a restore, logical
+  payload pieces are capped at 768 bytes, and raw-array pieces at 384 bytes.
+- `pololu_native_persistent_v3` verified that fix with zero setup failures,
+  but is also invalid for analysis. DGA timed calls completed and then failed
+  a 376-byte output allocation. The same MicroPython VM had previously
+  imported all 12 allocators during preflight and retained only about 70 KB
+  free. Its 16 raw attempts are diagnostic and zero are accepted.
+- Every condition now begins with a raw-REPL soft reset, and every retry after
+  a failed attempt receives an independent soft reset. This bypasses
+  `main.py`, imports only `replay_worker`, and prevents allocator-module code,
+  interned strings, fragmentation, or state from carrying into another
+  condition. Both COM12 and COM13 independently reported exactly 165,952 bytes
+  free at the fresh worker identity boundary; motors and sensors remained
+  uninitialized.
+- A clean COM12 diagnostic replayed the exact Bayesian trial-7 DGA K=361
+  call that had failed under the contaminated VM. It completed in 246,632 us,
+  its timed-call heap changed from 113,968 to 58,944 bytes, and its complete
+  output returned, including 56 robot-state fields. This was a high-K
+  historical call, not a claim that every later post-clue DGA solve will meet
+  the 30-second limit.
+- The worker now garbage-collects only after `PTIMED`, before output
+  serialization; the recorded heap-after value remains the value at the end
+  of the timed allocator call. Host output errors record the output stage and
+  field index. Discovery now explicitly exits a raw prompt before evaluating
+  its identity query, so either worker/REPL state is recoverable.
+- The final desktop verification suite passes 69 of 69 tests.
+- The final replay build is `micropython_1_24_o0_3ac0f4d66ab4`, with deployed
+  module-set SHA-256
+  `e77946bdfab97eeba571ef9b172891def5bf73764eee452407bffaa162627669`.
+  Both boards passed the final physical preflight: 24 of 24 native
+  restore/delta smokes completed, all four deterministic mission parity
+  checks passed, firmware/build/module hashes and 125 MHz clocks matched,
+  safe exit/restart passed, motors and sensors remained uninitialized, and
+  the maximum cross-device calibration deviation was 0.752% against the 5%
+  limit.
+- The only campaign intended for analysis after these corrections is
+  `pololu_native_persistent_v4`. Its immutable manifest hash and launch
+  process are recorded below after preparation.
+- Prepared `pololu_native_persistent_v4` with campaign-manifest SHA-256
+  `2ad6f680d8c23a200060abb1e927011841f569f73672232d4b93600e66f2b56b`.
+  All ten fail-closed provenance checks passed against both connected build
+  IDs. The sealed matrix contains 54 Bayesian conditions/1,350 missions and
+  48 collaborative conditions/480 missions, for 102 conditions and 1,830
+  missions total. The Bayesian sample remains the fixed 25-trial sample from
+  379 clue-qualified historical trials; the collaborative sample remains the
+  fixed ten historical trials listed above.
+
+## 2026-07-27 final RNG, DMCHBA, and timeout-recovery corrections
+
+### DGA context restoration and v4 invalidation
+
+- `pololu_native_persistent_v4` is invalid for analysis. The first
+  multi-robot DGA context restore tried to construct an uninitialized
+  `Random` object through `Random.__new__`, an operation unavailable on
+  MicroPython 1.24. This was a context-restore artifact outside the timed
+  allocator, not a DGA allocator result. Its raw records remain preserved and
+  none are accepted for analysis.
+- DGA now restores the exact MT19937 continuation through the normal supported
+  constructor, `Random(None, restored_state, index)`. The receiver
+  preallocates one `array('I')` directly from a `bytearray(length * 4)` and
+  streams the 624 state words into it. It does not create a 624- or
+  625-element Python pointer list and does not reseed or approximate the RNG
+  state.
+
+### Complete native Bayesian DMCHBA
+
+- The earlier Bayesian DMCHBA HIL factory still selected the generated
+  simulator port. That representation retained a 361-entry tuple-key
+  probability dictionary, built the candidate list twice, stored a large
+  tuple signature, and allocated overlapping assignment workspaces. Its
+  high-K memory behavior was therefore not a defensible native DMCHBA
+  feasibility measurement.
+- Bayesian DMCHBA now uses one complete, self-contained native MicroPython
+  implementation for both HIL and the future physical adapter. It keeps flat
+  float32 probabilities, packed uint16 candidate IDs and assignment
+  signatures, computes assignment costs on demand, and uses typed,
+  preallocated Hungarian vectors rather than an agent-by-task cost matrix.
+  Its scratch storage grows in O(N); the full 361-cell/four-robot workspace
+  payload is 16,375 bytes.
+
+### Final build and verification
+
+- The final replay build is `micropython_1_24_o0_71ffde22820c`.
+  Its source-bundle SHA-256 is
+  `71ffde22820c75d218c7e774ee2c6c45814568287a2cde5b0451eac221eb1dd5`
+  and its deployed module-set SHA-256 is
+  `39ca177708ca0120f47caf050627fa7c88a1e863668e8f58fbd0ece12e5365d0`.
+- The complete desktop verification suite passes 89 of 89 tests.
+- Both physical boards passed the final preflight: 24 of 24 native
+  restore/delta smokes, four of four deterministic parity checks, and two of
+  two forced DGA context restores passed. Firmware, build, module hashes, and
+  125 MHz clocks matched; maximum cross-device timing deviation was 0.34%.
+  Motor and sensor initialization counts remained zero on both boards.
+
+### v5 timeout-recovery finding and correction
+
+- `pololu_native_integration_canary_v5` ran historical Bayesian trial 7 at
+  DGA 100% and native DMCHBA 100%. Each condition completed the same six
+  pre-clue allocator calls, then robot 01 call 1 acknowledged
+  `PCALL_READY` and exceeded the 30-second timed boundary once.
+- Those single attempts were real observed deadline exceedances, but not
+  confirmed `timing_unusable_30s` classifications. After Ctrl-C, the replay
+  worker emitted `INTERRUPTED` and deliberately continued. The old restart
+  path discarded that acknowledgement, expected raw REPL immediately, and
+  marked both healthy USB devices disconnected before repetitions 2 and 3.
+  The v5 canary is invalidated for this timeout-recovery artifact, with zero
+  representative samples.
+- Timeout recovery now acknowledges `INTERRUPTED`, asks the idle worker to
+  `EXIT`, observes `BYE`, returns to raw REPL, performs a soft reset, and
+  verifies the same device identity and build before restoring the identical
+  fixture for the next repetition. Recovery success or transport failure is
+  journaled as its own phase. Timeout rows also retain the heap reported at
+  `PCALL_READY`, measured host elapsed time, and the configured threshold.
+  The two-of-three rule is applied only after independent clean-VM attempts;
+  recovery or USB failure never counts as an allocator timeout.
+
+### v6 recovery canary and prepared analysis campaign
+
+- `pololu_native_integration_canary_v6` passed the targeted recovery gate. For
+  each of Bayesian DGA 100% and native Bayesian DMCHBA 100%, it retained six
+  completed pre-clue calls; repetitions 1, 2, and 3 of the first post-clue
+  call each exceeded 30 seconds; all three clean-worker recoveries completed;
+  and there were zero transport errors. Each affected condition was correctly
+  isolated as `timing_unusable_30s`.
+- That canary is sealed `integration_canary_only`. Its append-only raw
+  evidence remains available, but no canary attempt, trial, or condition is
+  accepted as representative analysis data.
+- Prepared the immutable `pololu_native_persistent_v6` manifest with SHA-256
+  `3df4ac7cfb23e43a0b51110f3ad479e1fc6cff0b1611be9e151196cfa61b838e`.
+  It contains the full 102-condition, 1,830-mission matrix and binds the final
+  build, allocator and host sources, simulator sources, historical scenarios,
+  and trial-selection evidence. This entry records preparation only; it does
+  not claim that the full campaign has been launched.
+
+### Full v6 campaign launch
+
+- Launched `pololu_native_persistent_v6` at 2026-07-27 21:01:37 PDT as hidden
+  host process PID 18304, using both automatically discovered Pololus.
+  Append-only journals, process output, and the PID file are under
+  `results/allocator_replay/hil_campaigns/pololu_native_persistent_v6/`.
+- The longest predicted conditions were assigned first. COM12 initially owned
+  Bayesian DGA 100% and COM13 initially owned native Bayesian DMCHBA 100%.
+  Each completed six normal pre-clue calls, then independently produced three
+  acknowledged 30-second timeouts on the first post-clue call. All recovery
+  cycles completed and no transport error occurred. The scheduler correctly
+  stopped only those two conditions as `timing_unusable_30s`.
+- After those classifications, both boards remained connected and the same
+  host process continued scheduling work: COM12 moved to Bayesian DMCHBA 75%
+  and COM13 moved to Bayesian DGA 75%. At this checkpoint the campaign had two
+  stopped conditions, two running conditions, and 98 pending conditions.
+- Both 75% conditions subsequently completed the same three-attempt timeout
+  confirmation without transport errors and stopped in isolation. The
+  scheduler then moved COM12 to Bayesian HIPC 100% and COM13 to Bayesian ACBBA
+  100%. At the unattended handoff checkpoint, PID 18304 remained healthy with
+  four stopped conditions, two running conditions, and 96 pending conditions.
+
+## 2026-07-28 v6 pause, state-transfer corrections, and v7 continuation
+
+### Safe pause and v6 evidence audit
+
+- Stopped the exact hidden v6 runner PID 18304 after verifying its command
+  line, soft-reset both Pololus to clean MicroPython sessions, and confirmed
+  COM12 and COM13 remained discoverable. The two interrupted conditions were
+  returned to pending; incomplete ACBBA 50% trial 12 generation 1 and HIPC
+  50% trial 14 generation 1 remain in append-only journals but are excluded
+  from completed summaries.
+- At the pause checkpoint, v6 contained 97 completed trials, nine fully
+  completed conditions, 33 stopped conditions, and 60 pending conditions.
+  Seventeen stopped conditions had defensible `timing_unusable_30s`
+  classifications: exactly 51 acknowledged timeout attempts, repetitions
+  1-3 for every condition, 51 completed clean-worker recoveries, and zero
+  transport errors.
+- Audited all completed collaborative data: 93 completed trial generations
+  and 20,203 accepted allocator calls. There were zero setup, decoding,
+  memory, transport, invalid-output, or phase failures in those completed
+  trials; no duplicate generations or call-index gaps; all scenario hashes,
+  build IDs, device ownership, and 125 MHz clocks matched. Every timing row
+  satisfied `allocator_time_us = candidate_filter_time_us +
+  allocator_exclusive_time_us` exactly. No completed collaborative condition
+  requires rerunning.
+
+### Bayesian typed-array root cause and correction
+
+- All 15 `ValueError: bytes length not a multiple of item size` failures
+  occurred immediately after the first successful post-clue output from
+  generated Bayesian CBAA, ACBBA, PI, or HIPC. MicroPython 1.24 arrays expose
+  neither `.typecode` nor `.itemsize`; the old serializer therefore defaulted
+  every array to float32. A 361-element candidate `array('H')` occupied 722
+  bytes but was labeled float32, reproducing the exact host exception.
+- The controller no longer guesses a type for a type-opaque MicroPython array.
+  Bounded logical arrays fall back to item encoding. The five reusable
+  candidate buffers are preallocated during the shared HIL/physical setup
+  boundary and excluded from logical snapshots because they are transient
+  implementation workspaces. HIL and the new physical adapter both perform
+  this preparation before starting `ticks_us()`, so the timed
+  `choose_goal()` boundary remains identical.
+
+### Bayesian DMCHBA setup-memory root cause and correction
+
+- The Bayesian simulator exposes one `Belief.searched` set through
+  `views.searched`, `views.local_searched`, and `belief.searched`. The old HIL
+  transfer decoded three independent copies. Late in a mission, each encoded
+  copy was about 8.5 KB plus tuple/set heap, explaining the repeated
+  `PDATA`/`PEND` setup `MemoryError` events in DMCHBA 10%.
+- Large sets now stream in parts no larger than 768 encoded bytes. Explicit
+  state aliases restore the three searched paths to one object. After native
+  DMCHBA consumes that logical set during untimed setup, it retains a compact
+  361-byte searched bitmap, matching the native physical grid footprint.
+- Offline authoritative Bayesian trial 50, which previously stopped during
+  setup, now completed all 241 allocator calls, 412 total team steps, and 105
+  maximum steps by one robot. All 25 DMCHBA 10% trials are intentionally
+  rerun under the corrected build so that condition does not mix heap
+  footprints or build revisions.
+
+### Corrected build and physical gates
+
+- The complete allocator-replay suite passes 92 of 92 tests and compilation
+  checks. The corrected device build is
+  `micropython_1_24_o0_5af608a14777`, with source-bundle SHA-256
+  `5af608a14777d6fc15c8f7f034d662cfd36f2c0099895c870e4bbae4382d25d0`,
+  deployed module-set SHA-256
+  `e9502f20c40188d663877c540725132f4c047ca02a113109ae3cfc180c784599`,
+  and build-manifest SHA-256
+  `86dd81061c8bff12ae15d0108f1e797b92a191e800f6ff8ccdc6aa794e86074a`.
+  Both boards received the build with `main.py` unchanged.
+- The new two-board physical preflight passed: 24 of 24 persistent smokes,
+  four of four parity checks, two of two forced DGA context restores, matching
+  firmware/build/module hashes and 125 MHz clocks, safe REPL exit, and zero
+  motor or sensor initialization. Five-repetition cross-device calibration
+  differed by only 0.0104%.
+- A dedicated 19x19 Bayesian DMCHBA K=36 setup gate used 360 searched cells
+  and ran restore, resident delta, and forced restore on both boards. All six
+  calls returned the expected goals with no `PDATA`, `PEND`, or setup error.
+  Heap before timing remained between 99,760 and 111,408 bytes for the first
+  two phases and above 110,700 bytes after forced restore. The saved gate JSON
+  has SHA-256
+  `44a25a011a6f08cd05fb36ca9d9e1d122da5930253b4bd46fc490c2488a3d5a8`.
+- Two diagnostic-only actual-trial canaries crossed the former post-clue
+  decoder boundary repeatedly. ACBBA/HIPC produced 46 completed hardware
+  calls and CBAA/PI produced 22, with zero condition or transport errors.
+  Both canaries were intentionally stopped after satisfying the gate and
+  sealed `integration_canary_only`; none of their rows is analysis data.
+
+### Provenance-preserving v7 launch
+
+- V6 is frozen as a superseded partial campaign. `CONTINUED_BY.json` retains
+  the exact valid/invalid scope. Its 93 audited collaborative trials and 17
+  confirmed timing classifications remain under the original v6 manifest and
+  build; corrected source must never be resumed into v6.
+- Prepared `pololu_native_persistent_v7` with immutable campaign-manifest
+  SHA-256
+  `5510c684186c0a7f205d0713a426185f20081cb8368c8403a7b069d5e2f84d8a`.
+  Its schedule contains the 76 invalid or unfinished conditions and 1,387
+  mission runs: all 16 invalid conditions were requeued, DMCHBA 10% was reset
+  to all 25 trials, and the three audited completed trials within the two
+  interrupted collaborative conditions were omitted. `CARRY_FORWARD.json`
+  defines how final reporting joins v6 and v7 without rewriting either.
+- All ten provenance checks passed against both connected boards. Launched
+  v7 as hidden PID 25032 at 2026-07-28 07:50 PDT. COM12 began retesting
+  Bayesian ACBBA 100% and COM13 Bayesian PI 100%, two conditions previously
+  stopped by the host decoder. At the monitored handoff, both had crossed the
+  former failure point with at least nine completed calls each and zero setup,
+  decoding, timeout, transport, or condition errors.
+- These corrections changed only `allocator_replay` and its versioned result
+  metadata. No legacy `hardware/Pololu_*.py`, device `main.py`, archived
+  allocator, or benchmark simulator source was edited.
+
+### Early v7 memory-classification qualification
+
+- Bayesian ACBBA 100% crossed the former typed-array decoder failure, producing
+  19 completed calls. Robot 01 call 2 then produced one setup-memory failure
+  followed by two reproducible failures inside timed `choose_goal()`. The two
+  confirmations each began with 31,440 bytes free, failed after about 715.5 ms
+  while requesting 2,048 bytes, and recovered cleanly. The scheduler therefore
+  correctly stopped this HIL condition as `memory_unusable` under its
+  two-of-three rule.
+- This is presently classified more narrowly as
+  `hil_fixture_memory_unusable`, not proof that resident native ACBBA 100% is
+  unusable on a real testbed. HIL multiplexes four simulator robots through
+  one controller and reconstructs a complete robot context when ownership
+  switches; the physical adapter keeps one robot context resident and applies
+  compact deltas. Other ACBBA 100% calls with similar candidate counts
+  completed when they began with more heap.
+- The campaign remains running because the evidence does not indicate a
+  global allocator-correctness failure. The stopped row is quarantined from
+  physical-testbed feasibility claims in `CLASSIFICATION_NOTES.json` and
+  requires a resident-context hardware probe before final interpretation.
+  A later ACBBA 75% context setup also failed once, but two clean-worker
+  confirmations completed the allocator call; that condition remains active
+  and is not classified unusable.

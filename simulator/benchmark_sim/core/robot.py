@@ -292,12 +292,19 @@ class RobotShell:
             self.current_goal = None
             self._active_peer_positions = plan_peer_positions
             allocator_started_ns = perf_counter_ns()
+            filter_sample_index = len(self.counters.candidate_filter_time_ns_samples)
             allocation_active = self._allocation_active()
             try:
                 decision = self.allocator.choose_goal(self)
             finally:
                 allocator_elapsed_ns = max(0, perf_counter_ns() - allocator_started_ns)
+                nested_filter_ns = sum(
+                    self.counters.candidate_filter_time_ns_samples[filter_sample_index:]
+                )
                 self.counters.allocator_time_ns_samples.append(allocator_elapsed_ns)
+                self.counters.allocator_solve_time_ns_samples.append(
+                    max(0, allocator_elapsed_ns - nested_filter_ns)
+                )
                 phase_samples = (
                     self.counters.allocator_time_ns_post_clue
                     if allocation_active

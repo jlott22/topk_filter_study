@@ -8,6 +8,7 @@ from pathlib import Path
 from sensitivity_suite.suite import (
     EXPECTED_CONDITIONS,
     EXPECTED_TRIALS,
+    MULTITARGET_TRIALS_PER_CONDITION,
     TARGET_COUNT,
     TOP_K_RATES,
     build_manifest_rows,
@@ -63,12 +64,12 @@ class SensitivitySuiteTests(unittest.TestCase):
                 self.assertTrue(cells.isdisjoint(starts))
                 self.assertEqual(len(cells), 5)
 
-    def test_known_target_scenarios_have_50_unique_targets(self) -> None:
+    def test_known_target_scenarios_have_100_trials_with_50_unique_targets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "known.csv"
             write_known_target_scenarios(path, 456)
             rows = read_csv_rows(path)
-            self.assertEqual(len(rows), 50)
+            self.assertEqual(len(rows), MULTITARGET_TRIALS_PER_CONDITION)
             starts = edge_even_starts(19, 4)
             for row in rows:
                 targets = {
@@ -92,7 +93,7 @@ class SensitivitySuiteTests(unittest.TestCase):
                 scenario_dir / "clue_g28_n50.csv", 28, (4,), 3
             )
             write_known_target_scenarios(
-                scenario_dir / "known_targets_g19_t50_n50.csv", 4
+                scenario_dir / "known_targets_g19_t50_n100.csv", 4
             )
             validate_scenario_files(scenario_dir)
             rows = build_manifest_rows(root)

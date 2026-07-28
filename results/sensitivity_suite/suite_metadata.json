@@ -1,12 +1,13 @@
 {
   "schema": 1,
-  "created_at_unix": 1785028681.4869976,
+  "created_at_unix": 1785120070.9274032,
   "repository_root": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study",
   "benchmark_simulator_root": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\topk_filter_study\\simulator",
   "known_visit_simulator_root": "C:\\Users\\lottj\\Desktop\\research\\decentralized benchmark\\dcta_benchmark_sim",
   "conditions": 324,
-  "trials_per_condition": 50,
-  "expected_trials": 16200,
+  "default_trials_per_condition": 50,
+  "multitarget_trials_per_condition": 100,
+  "expected_trials": 18000,
   "default_workers": 12,
   "top_k_rates": [
     1.0,
