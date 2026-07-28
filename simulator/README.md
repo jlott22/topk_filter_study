@@ -45,7 +45,8 @@ SHA-256 of the ordered selected scenarios. Pass that canonical value back with
 before execution if IDs, order, targets, or clues differ.
 
 The `topk_filter` profile also creates or verifies the shared
-`../results/topk_simulation_scenario_manifest.json` automatically. It records
+`../results/bayesian_clue_search/primary_topk_campaign/scenario_manifest.json`
+automatically. It records
 the grid, logic revision, selection hash, and ordered trial IDs, so a later
 algorithm or Top-K condition with a different selection is refused before any
 trial runs. Use `--scenario-manifest-lock <path>` for a deliberately separate

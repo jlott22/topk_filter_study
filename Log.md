@@ -33,8 +33,9 @@
   completed all five scenarios below the original 15,000-event cap. These
   diagnostics did not modify the campaign data or production source.
 - Final descriptive results and the exclusion statement are consolidated in
-  `results/FINAL_RESULTS.md`. Condition-level means are stored in
-  `results/topk_500_event15000/final_condition_summary.csv`.
+  `results/bayesian_clue_search/primary_topk_campaign/README.md`.
+  Condition-level means are stored in
+  `results/bayesian_clue_search/primary_topk_campaign/final_condition_summary.csv`.
 
 ## Top-K filter testing plan
 
@@ -418,7 +419,7 @@ timestamps, candidate ties, and path messages are unchanged.
 - Benchmark:
   `simulator/benchmark_sim/tests/benchmark_allocator_memory_optimization.py`
 - Recorded comparison:
-  `results/allocator_memory_optimization_comparison.md`
+  `results/bayesian_clue_search/allocator_memory_optimization.md`
 
 Coverage includes randomized finite and uniform probabilities, one through
 four robots, candidate limits `all`, 5, 12, and 25, production 19 by 19
@@ -1671,7 +1672,8 @@ algorithm:
   workers.
 - `results/sensitivity_suite/_cv100/progress.json` records the campaign as
   complete with 3,600 jobs. The installed canonical results are under
-  `results/sensitivity_suite/raw/multitarget/multitarget_g19_r4_t50`.
+  `results/sensitivity_suite/raw/collaborative_known_target_visit/`
+  `topk_sensitivity/multitarget_g19_r4_t50`.
 - Collaborative `system_performance.csv` rows now include team maximums
   derived from robot-level rows:
   `allocator_time_ms_team_max`,

@@ -29,7 +29,7 @@ Hardware-side scripts and firmware for running decentralized task-cell allocatio
 - `metrics_hub.py` - MQTT metrics collector and trial controller.
 - `../simulator/scenarios/final_trial_500.csv` - canonical validated study
   scenario manifest used by the hub by default.
-- `../results/trials_d1_c4_g19*` - historical generated trial artifacts; these
+- `../results/hardware_pilot/legacy_clue_trials_g19_c4*` - historical generated trial artifacts; these
   are not the hub's default study input.
 - `clue_object_generator_manhat.py` - trial target/clue generator.
 

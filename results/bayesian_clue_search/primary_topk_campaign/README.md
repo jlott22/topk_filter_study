@@ -88,20 +88,20 @@ A concise paper disclosure is:
 
 ## Validation and data files
 
-- `topk_500_event15000/final_condition_summary.csv` contains the condition-level
+- `final_condition_summary.csv` contains the condition-level
   descriptive means used in this draft.
-- `topk_500_event15000/combined/all_trial_summary.csv` contains all 18,000 trial
+- `combined/all_trial_summary.csv` contains all 18,000 trial
   outcome rows.
-- `topk_500_event15000/combined/all_system_performance.csv` contains all 18,000
+- `combined/all_system_performance.csv` contains all 18,000
   system-performance rows.
-- `topk_500_event15000/combined/all_robot_performance.csv` contains all 72,000
+- `combined/all_robot_performance.csv` contains all 72,000
   robot-performance rows.
-- `topk_500_event15000/combined/all_computational_performance.csv` contains all
+- `combined/all_computational_performance.csv` contains all
   72,000 computational-performance rows.
-- `topk_500_event15000/smoke_validation.json` records the passing pre-campaign
+- `smoke_validation.json` records the passing pre-campaign
   smoke validation.
-- `topk_500_event15000/final_validation.json` records final structural
+- `final_validation.json` records final structural
   validation for all 36 conditions.
-- `topk_500_event15000/extended_retry_report.json` records the 50,000- and
+- `extended_retry_report.json` records the 50,000- and
   100,000-event retries and the five remaining failures.
 

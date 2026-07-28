@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from .suite import (
+    campaign_records_dir,
+    raw_environment_dir,
     DEFAULT_RUN_ROOT,
+    Environment,
     KNOWN_VISIT_ROOT,
     MULTITARGET_TRIALS_PER_CONDITION,
     read_csv_rows,
@@ -119,7 +122,7 @@ def replace_arg(command: list[str], option: str, value: str) -> None:
 
 
 def load_collaborative_conditions(run_root: Path) -> list[dict[str, str]]:
-    path = run_root / "condition_manifest.csv"
+    path = campaign_records_dir(run_root) / "condition_manifest.csv"
     if not path.exists():
         raise FileNotFoundError(f"missing campaign manifest: {path}")
     with path.open(newline="", encoding="utf-8-sig") as handle:
@@ -786,8 +789,20 @@ def write_computational_summary(run_root: Path) -> None:
 
 
 def install_results(run_root: Path, staging_root: Path, merged_root: Path) -> None:
-    raw_multitarget = run_root / "raw" / SUITE_NAME
-    canonical = raw_multitarget / ENVIRONMENT
+    canonical = raw_environment_dir(
+        run_root,
+        Environment(
+            SUITE_NAME,
+            ENVIRONMENT,
+            "known_visit",
+            19,
+            ROBOT_COUNT,
+            "known_targets_g19_t50_n100.csv",
+            "known_targets_g19_t50",
+            target_count=TARGET_COUNT,
+            trials_per_condition=SCENARIO_COUNT,
+        ),
+    )
     backup = staging_root / "previous_collaborative_results"
     _require_descendant(canonical, run_root)
     _require_descendant(backup, staging_root)
@@ -859,7 +874,20 @@ def main() -> None:
         status(staging_root)
         return
     if args.command == "backfill-maxima":
-        environment_root = run_root / "raw" / SUITE_NAME / ENVIRONMENT
+        environment_root = raw_environment_dir(
+            run_root,
+            Environment(
+                SUITE_NAME,
+                ENVIRONMENT,
+                "known_visit",
+                19,
+                ROBOT_COUNT,
+                "known_targets_g19_t50_n100.csv",
+                "known_targets_g19_t50",
+                target_count=TARGET_COUNT,
+                trials_per_condition=SCENARIO_COUNT,
+            ),
+        )
         updated = backfill_system_maxima(environment_root)
         validate_merged(run_root, environment_root)
         print(f"backfilled and verified {updated} collaborative system rows")

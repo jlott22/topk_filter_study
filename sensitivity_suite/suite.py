@@ -53,6 +53,7 @@ ALGORITHMS = (
 )
 
 EXPECTED_CONDITIONS = 324
+CAMPAIGN_RECORDS_DIR = "campaign_records"
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,22 @@ class Environment:
     comm_level: str = ""
     target_count: int = 1
     trials_per_condition: int = TRIALS_PER_CONDITION
+
+
+def campaign_records_dir(run_root: Path) -> Path:
+    return run_root / CAMPAIGN_RECORDS_DIR
+
+
+def raw_environment_dir(run_root: Path, environment: Environment) -> Path:
+    raw_root = run_root / "raw"
+    if environment.runner == "known_visit":
+        return (
+            raw_root
+            / "collaborative_known_target_visit"
+            / "topk_sensitivity"
+            / environment.key
+        )
+    return raw_root / "bayesian_clue_search" / environment.suite / environment.key
 
 
 SCALE_ENVIRONMENTS = (
@@ -428,7 +445,6 @@ def build_command(
 
 def build_manifest_rows(run_root: Path) -> list[dict[str, object]]:
     scenario_dir = run_root / "scenarios"
-    raw_dir = run_root / "raw"
     rows: list[dict[str, object]] = []
     index = 0
     for environment in ALL_ENVIRONMENTS:
@@ -448,7 +464,7 @@ def build_manifest_rows(run_root: Path) -> list[dict[str, object]]:
                     f"{environment.key}_{algorithm_key}_topk{label}"
                 )
                 out_dir = (
-                    raw_dir / environment.suite / environment.key
+                    raw_environment_dir(run_root, environment)
                     / algorithm_key / f"topk_{label}"
                 ).resolve()
                 cwd, command = build_command(
@@ -544,12 +560,14 @@ def prepare(run_root: Path) -> None:
     )
     validate_scenario_files(scenario_dir)
 
+    records_dir = campaign_records_dir(run_root)
+    records_dir.mkdir(parents=True, exist_ok=True)
     calibration = rayleigh_calibration()
-    (run_root / "channel_calibration.json").write_text(
+    (records_dir / "channel_calibration.json").write_text(
         json.dumps(calibration, indent=2) + "\n", encoding="utf-8"
     )
     rows = build_manifest_rows(run_root)
-    write_manifest(run_root / "condition_manifest.csv", rows)
+    write_manifest(records_dir / "condition_manifest.csv", rows)
     metadata = {
         "schema": 1,
         "created_at_unix": time.time(),
@@ -565,7 +583,7 @@ def prepare(run_root: Path) -> None:
         "debug_max_events_clue": DEBUG_MAX_EVENTS,
         "known_visit_debug_max_events": "existing simulator default",
     }
-    (run_root / "suite_metadata.json").write_text(
+    (records_dir / "suite_metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
     )
     print(f"Prepared {len(rows)} conditions and {EXPECTED_TRIALS} trials at {run_root}")
@@ -576,7 +594,7 @@ def prepare(run_root: Path) -> None:
 
 
 def load_manifest(run_root: Path) -> list[dict[str, str]]:
-    path = run_root / "condition_manifest.csv"
+    path = campaign_records_dir(run_root) / "condition_manifest.csv"
     if not path.exists():
         raise FileNotFoundError(f"missing manifest: {path}; run prepare first")
     with path.open(newline="", encoding="utf-8-sig") as handle:
@@ -657,7 +675,7 @@ def progress_snapshot(rows: Sequence[dict[str, str]]) -> dict[str, object]:
 
 def write_progress(run_root: Path, rows: Sequence[dict[str, str]]) -> None:
     snapshot = progress_snapshot(rows)
-    path = run_root / "progress.json"
+    path = campaign_records_dir(run_root) / "progress.json"
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(
         json.dumps(snapshot, indent=2) + "\n", encoding="utf-8"
@@ -757,7 +775,7 @@ def run_campaign(run_root: Path, workers: int) -> None:
                     "error": repr(exc),
                 }
             with log_lock:
-                with (run_root / "launcher.jsonl").open(
+                with (campaign_records_dir(run_root) / "launcher.jsonl").open(
                     "a", encoding="utf-8"
                 ) as handle:
                     handle.write(json.dumps({
@@ -816,6 +834,7 @@ def verify(run_root: Path, allow_incomplete: bool = False) -> dict[str, object]:
         for failure in trial_failures(row):
             failures.append({
                 "condition_id": condition_id,
+                "suite": row["suite"],
                 "trial_id": failure.get("trial_id", ""),
                 "failure_type": failure.get("failure_type", ""),
                 "failure_message": failure.get("failure_message", ""),
@@ -843,11 +862,13 @@ def verify(run_root: Path, allow_incomplete: bool = False) -> dict[str, object]:
         "verification_issues": len(issues),
         "failed_trials": len(failures),
     }
-    (run_root / "verification_summary.json").write_text(
+    records_dir = campaign_records_dir(run_root)
+    records_dir.mkdir(parents=True, exist_ok=True)
+    (records_dir / "verification_summary.json").write_text(
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
-    write_dict_rows(run_root / "verification_issues.csv", issues)
-    write_dict_rows(run_root / "failures.csv", failures)
+    write_dict_rows(records_dir / "verification_issues.csv", issues)
+    write_dict_rows(records_dir / "failures.csv", failures)
     print(json.dumps(summary, indent=2))
     if issues and not allow_incomplete:
         raise RuntimeError(f"verification found {len(issues)} issue(s)")
@@ -1030,9 +1051,25 @@ def report(run_root: Path) -> None:
         })
 
     report_dir = run_root / "reports"
-    write_dict_rows(report_dir / "paired_step_results.csv", paired_rows)
-    write_dict_rows(report_dir / "step_summary.csv", summaries)
-    write_dict_rows(report_dir / "report_failures.csv", failures)
+    report_sets = {
+        "all_missions": ({"scale", "communication", "multitarget"}),
+        "bayesian_clue_search": ({"scale", "communication"}),
+        "collaborative_known_target_visit": ({"multitarget"}),
+    }
+    for name, suites in report_sets.items():
+        destination = report_dir / name
+        write_dict_rows(
+            destination / "paired_step_results.csv",
+            [row for row in paired_rows if str(row["suite"]) in suites],
+        )
+        write_dict_rows(
+            destination / "step_summary.csv",
+            [row for row in summaries if str(row["suite"]) in suites],
+        )
+        write_dict_rows(
+            destination / "report_failures.csv",
+            [row for row in failures if str(row.get("suite", "")) in suites],
+        )
     print(
         f"Wrote {len(paired_rows)} paired rows and {len(summaries)} "
         f"condition summaries to {report_dir}"

@@ -160,13 +160,15 @@ def _baseline_path(condition: Condition) -> str:
     algorithm = condition.algorithm.lower()
     if condition.mission == "bayesian":
         path = (
-            REPOSITORY_ROOT / "results" / "topk_500_event15000" / "combined"
+            REPOSITORY_ROOT / "results" / "bayesian_clue_search"
+            / "primary_topk_campaign" / "combined"
             / f"{algorithm}_topk_{rate}" / "system_performance.csv"
         )
     else:
         path = (
             REPOSITORY_ROOT / "results" / "sensitivity_suite" / "raw"
-            / "multitarget" / "multitarget_g19_r4_t50" / algorithm
+            / "collaborative_known_target_visit" / "topk_sensitivity"
+            / "multitarget_g19_r4_t50" / algorithm
             / f"topk_{rate:03d}" / "system_performance.csv"
         )
     return str(path.resolve()) if path.exists() else ""

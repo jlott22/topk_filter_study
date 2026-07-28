@@ -1,29 +1,19 @@
-# Results
+# Study Results
 
-Store committed Top-K filtering study outputs in this directory.
+Use this directory to review completed experiments. The folders are organized
+by mission or by the role the artifact played in the study.
 
-The simulator and hardware hub also keep small cross-condition scenario-lock
-records here by default:
+| Location | Contents |
+| --- | --- |
+| [`bayesian_clue_search/`](bayesian_clue_search/README.md) | The primary 500-scenario Bayesian CLUE-search campaign and its allocator-memory comparison. |
+| [`sensitivity_suite/`](sensitivity_suite/README.md) | The cross-mission sensitivity campaign: Bayesian scale and communication tests, plus collaborative known-target visit results. |
+| [`hardware_pilot/`](hardware_pilot/README.md) | Imported legacy physical-test fixtures and their five-trial scenario manifest. |
 
-- `topk_simulation_scenario_manifest.json` locks the exact ordered simulator
-  selection across all algorithm and Top-K conditions.
-- `topk_study_scenario_manifest.json` locks the exact ordered hardware
-  selection across all hardware conditions.
+The primary Bayesian campaign is in
+[`bayesian_clue_search/primary_topk_campaign/`](bayesian_clue_search/primary_topk_campaign/README.md).
+Its `scenario_manifest.json` is the shared ordered-scenario lock for the
+Bayesian `topk_filter` study profile. It is not a miscellaneous manifest.
 
-These are intentionally separate because the simulation campaign and physical
-hardware campaign can use different numbers of scenarios. Do not reuse a lock
-for a different cohort; pass an explicit alternate lock path for smoke tests.
-
-The imported `trials_d1_c4_g19` files are the hardware trial outputs that were
-present when the repository was organized. Simulator runs should use an output
-directory beneath `results/`, for example:
-
-```text
-results/acbba_topk_25/
-results/acbba_topk_50/
-results/acbba_all_candidates/
-```
-
-The completed 500-scenario Top-K campaign is documented in
-[`FINAL_RESULTS.md`](FINAL_RESULTS.md). Its raw, combined, validation, retry,
-and condition-summary artifacts are under `topk_500_event15000/`.
+`allocator_replay/` and `sensitivity_suite/_cv100/` may exist in a local
+checkout as generated replay captures or temporary shard outputs. They are
+intentionally ignored and are not part of the published result set.

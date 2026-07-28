@@ -20,7 +20,9 @@ from benchmark_sim.metrics.summary import build_computational_performance_rows, 
 DEFAULT_TOPK_SCENARIO_MANIFEST_LOCK = (
     Path(__file__).resolve().parents[2]
     / "results"
-    / "topk_simulation_scenario_manifest.json"
+    / "bayesian_clue_search"
+    / "primary_topk_campaign"
+    / "scenario_manifest.json"
 )
 
 
@@ -275,7 +277,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "override the shared ordered-scenario lock path; topk_filter defaults "
-            "to results/topk_simulation_scenario_manifest.json"
+            "to results/bayesian_clue_search/primary_topk_campaign/"
+            "scenario_manifest.json"
         ),
     )
     manifest_lock_group.add_argument(
