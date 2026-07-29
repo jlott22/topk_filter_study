@@ -2417,3 +2417,60 @@ an additional Pololu. V6 and V7 remain preserved as diagnostic evidence and
 must not be used as representative timing or feasibility data; their formal
 invalidation and the fresh V8 manifest will be completed before the next
 campaign launch.
+
+## 2026-07-28 — Third Pololu connection and three-board preflight
+
+- Discovery found three MicroPython 1.24 Pololus at 125 MHz with no USB
+  failures: COM12 `e4621cb30b2b352f`, COM13 `e4621cb30b43372f`, and COM14
+  `e4621cb30b16392f`.
+- COM14 initially answered the MicroPython identity probe but not the replay
+  protocol because the new board did not yet contain the corrected replay
+  modules. Build `micropython_1_24_o0_2539f0c4fe4d` was deployed to COM14.
+  Deployment uploaded only replay `.mpy` modules and reported
+  `main_py_changed=false`; existing physical robot programs were not changed.
+- The corrected three-board preflight passed. All 36 allocator smoke fixtures,
+  six parity checks, three forced large DGA context restores, three safe REPL
+  exits, worker isolation, heap checks, and motor/sensor safety checks passed.
+  Firmware, module hashes, build ID, MicroPython version, and 125 MHz clock
+  matched across all boards.
+- Three-repetition calibration medians were 53,827 microseconds on COM12,
+  53,756 on COM13, and 53,836 on COM14. The maximum deviation from the
+  reference was 0.132%, within the required 5% tolerance.
+- No analysis campaign was launched during discovery or preflight.
+
+Using 127 previously completed HIL trial wall times as the empirical planning
+sample gives mean durations of 17.8 minutes for Bayesian missions and 11.3
+minutes for collaborative missions. If all 1,830 planned missions completed,
+the conservative workload is about 491 device-hours: roughly 10.2 days on two
+boards or 6.8 days on three. Conditions that reproducibly cross the 30-second
+allocator limit stop early, so the operational estimate is approximately
+5.5–7 days on three boards versus 8–10.5 days on two. The third board should
+save about 2.5–3.5 elapsed days, close to the ideal 33% reduction.
+
+## 2026-07-28 — Fresh three-board V8 launch
+
+- V6 and V7 were formally sealed `invalid_for_analysis` with reason
+  `pre_timing_hil_event_batch_heap_artifact`. Their append-only raw journals
+  retained their previously recorded SHA-256 hashes. Regenerated reports
+  preserve 21,586 V6 and 5,400 V7 raw diagnostic attempts, while accepting
+  zero calls, trials, timing samples, or feasibility classifications for
+  analysis.
+- V7 `CONTINUED_BY.json` and V8 `CARRY_FORWARD.json` explicitly carry zero
+  result rows or classifications forward. Only the historical trial IDs and
+  scenario hashes are reproduced.
+- Prepared fresh campaign `pololu_native_persistent_v8` with 102 conditions
+  and 1,830 mission runs. All 102 jobs began pending. The immutable manifest
+  SHA-256 is
+  `0ebdd6edccecfc417dc69615b9fba440d66227d9dfe91bf66cd2ed74605368d3`;
+  it is bound to corrected build
+  `micropython_1_24_o0_2539f0c4fe4d`.
+- Launched V8 on COM12, COM13, and COM14 as background PID 32648. Initial
+  longest-first assignments were Bayesian DGA 100%, DMCHBA 100%, and DGA 75%.
+  Initial accepted calls on all boards had correct build identity and exact
+  `allocator = filter + allocator-exclusive` timing arithmetic.
+- The first three expensive conditions independently produced three confirmed
+  30-second timeout attempts and stopped only their own conditions as
+  `timing_unusable_30s`: Bayesian DMCHBA 100%, DGA 100%, and DGA 75%. Each
+  board recovered cleanly and immediately claimed its next condition. At the
+  monitored handoff there were three stopped, three running, and 96 pending
+  conditions, with zero USB transport errors and an empty runner error log.
