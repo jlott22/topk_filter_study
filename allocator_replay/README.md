@@ -283,3 +283,24 @@ Bayesian typed-array host failures, Bayesian DMCHBA 10%, and unfinished work
 were moved to v7; corrected source must never be resumed into v6. The
 `CONTINUED_BY.json` and `CARRY_FORWARD.json` markers define the exact join
 between the two append-only cohorts.
+
+### Current hardware-validation status (2026-07-28)
+
+The v6/v7 HIL memory classifications were subsequently traced to a
+pre-timing event-batching and output-materialization heap artifact. They are
+diagnostic only and are not representative native-hardware feasibility
+results. The corrected build,
+`micropython_1_24_o0_2539f0c4fe4d`, stages events and output in bounded chunks,
+uses canonical post-call state caching, and runs each preflight allocator in a
+fresh worker.
+
+Both 125 MHz boards passed the corrected full preflight. Regression run
+`event_staging_and_output_streaming_v1` then passed all seven exact historical
+failure prefixes on generation 1 with zero failed call phases or failed gate
+results. Every gate applied the target Pololu response to the live simulator
+and completed a later authoritative hardware call.
+
+No analysis campaign is currently running. Do not resume v6 or v7. A fresh v8
+campaign will be prepared only after the final device set is connected; its
+manifest will rerun the complete 102-condition, 1,830-mission matrix without
+carrying forward v6/v7 timings or feasibility classifications.

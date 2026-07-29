@@ -2372,3 +2372,48 @@ algorithm:
   A later ACBBA 75% context setup also failed once, but two clean-worker
   confirmations completed the allocator call; that condition remains active
   and is not classified unusable.
+
+## 2026-07-28 — HIL heap-artifact correction and two-board regression result
+
+The early v7 memory classifications above were traced to the HIL transport
+layout, not to evidence that the same native allocator is unusable on a
+resident physical robot. V7 delivered 21–28 KB of queued allocator events in
+one pre-timing setup header and materialized large output maps before sending
+them. That HIL-only batching fragmented the Pololu heap. The resident native
+path receives events incrementally and does not retain a complete trial
+fixture.
+
+- Setup now sends one ordered event at a time in bounded deltas.
+- Device output is encoded and returned in bounded chunks without copying a
+  complete indexed map.
+- Host state caching now uses the canonical post-call snapshot, preventing
+  false full-map retransmission.
+- Preflight now starts a fresh allocator worker for every algorithm and
+  calibration run, matching a clean native start.
+- The corrected replay-only build is
+  `micropython_1_24_o0_2539f0c4fe4d`, source-bundle SHA-256
+  `2539f0c4fe4db9ca6287187ad6ff1c96f70dd9a348a9db27b27887dd76a1b268`,
+  and module-set SHA-256
+  `ec22e9364753a0d5d0801fcda6681caf53fea1e55820ca6a151aada4c19cf4ee`.
+  Both boards received it with `main.py` unchanged.
+- The corrected two-board preflight passed all 24 persistent smokes, parity,
+  forced DGA context restoration, firmware/build/clock checks, safe REPL exit,
+  and motor/sensor non-initialization. Both boards ran at 125 MHz; calibration
+  medians were 53,550 and 53,658 microseconds, a 0.10% difference.
+- All seven exact former-failure regression gates passed on their first
+  generation with zero failed call phases and zero failed gate results:
+  CBAA 50%, ACBBA 25%, ACBBA 50%, ACBBA 75%, PI 50%, HIPC 25%, and HIPC 50%.
+  Each gate applied the target Pololu response to the live simulator and
+  completed one subsequent authoritative hardware call.
+- The two final requested gates were HIPC 25% (107 accepted calls, 1,923.3
+  seconds wall time) and PI 50% (104 accepted calls, 2,536.5 seconds wall
+  time). The already-running scheduler also completed the queued ACBBA 50%
+  gate on the idle second board in 491.2 seconds.
+
+Regression run `event_staging_and_output_streaming_v1` is complete and its
+schedule is `passed`. Runner PID 29248 exited; no HIL campaign was restarted.
+The next full campaign remains intentionally deferred until the user connects
+an additional Pololu. V6 and V7 remain preserved as diagnostic evidence and
+must not be used as representative timing or feasibility data; their formal
+invalidation and the fresh V8 manifest will be completed before the next
+campaign launch.
