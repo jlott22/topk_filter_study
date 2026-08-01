@@ -2474,3 +2474,71 @@ save about 2.5–3.5 elapsed days, close to the ideal 33% reduction.
   board recovered cleanly and immediately claimed its next condition. At the
   monitored handoff there were three stopped, three running, and 96 pending
   conditions, with zero USB transport errors and an empty runner error log.
+
+## 2026-07-29 — User-requested V8 pause before expanding to five boards
+
+- Stopped background runner PID 32648 after 15.65 hours so two additional
+  Pololus can be connected, deployed, and preflighted. The runner error log
+  was empty and no USB transport errors had occurred.
+- Preserved 63 completed trials, ten conditions classified
+  `timing_unusable_30s`, and one fully completed condition. The ten stopped
+  Bayesian conditions represent 250 trial slots; together with the 63
+  completed trials, 313 of 1,830 planned mission slots were resolved at the
+  pause.
+- Three partial generation-1 trials were intentionally interrupted and remain
+  in the append-only journals but are not representative completed trials:
+  ACBBA 100% trial 313 on COM14, CBAA 100% trial 56 on COM12, and CBAA 75%
+  trial 7 on COM13. They will restart from their historical scenarios with
+  generation 2 when the campaign resumes.
+- Campaign schedule status is explicitly `paused` with reason
+  `user_requested_add_two_pololus`. The interrupted jobs were returned to
+  `pending`; completed-trial lists, stopped conditions, device ownership, and
+  generation counters were preserved.
+- COM12, COM13, and COM14 were returned to the normal MicroPython REPL and
+  rediscovered with their expected stable device IDs. No device files,
+  `main.py`, allocator source, campaign manifest, or existing journal record
+  was changed.
+
+## 2026-07-29 — Five-board alignment, preflight, and V8 resume
+
+- Discovery found five unique Pololus: COM3 `e4621cb30b0b342f`, COM11
+  `e4621cb30b4b372f`, COM12 `e4621cb30b2b352f`, COM13
+  `e4621cb30b43372f`, and COM14 `e4621cb30b16392f`. COM11, COM12, COM13,
+  and COM14 already ran MicroPython 1.24.0 with MPY ABI 4870 at 125 MHz.
+  COM3 ran MicroPython 1.22.1 with MPY ABI 4614 and required alignment.
+- Before changing either new board, copied and SHA-256 verified its complete
+  filesystem. COM3's backup contains 73 files and 881,650 bytes at
+  `results/allocator_replay/device_backups/`
+  `e4621cb30b0b342f_pre_v124_20260729T164139Z`; COM11's contains 79 files
+  and 1,185,999 bytes at `results/allocator_replay/device_backups/`
+  `e4621cb30b4b372f_pre_replay_deploy_20260729T164139Z`. Both comparisons
+  had zero missing, extra, or mismatched files, and adjacent JSON manifests
+  retain every relative path, byte count, and file hash.
+- Updated only COM3 with the verified
+  `POLOLU_3PI_2040_ROBOT-20241025-v1.24.0.uf2` image, SHA-256
+  `4fc62cff903000079ea0cd462c1b6e5f3e2a8f1ad3608e81439a52a8b22a8364`.
+  COM3 then reported MicroPython 1.24.0, MPY ABI 4870, and 125 MHz. The
+  firmware update retained all 73 original files and all 881,650 bytes
+  byte-for-byte, so no replacement copy was necessary.
+- Deployed sealed replay build `micropython_1_24_o0_2539f0c4fe4d` only to
+  COM3 and COM11. Forty replay `.mpy` modules were uploaded to each board.
+  Before/after SHA-256 checks proved that neither board's `main.py` changed.
+- The joint five-board preflight passed. Firmware, implementation, build ID,
+  deployed module hash, and 125 MHz clocks matched. All 60 persistent
+  mission/algorithm smoke fixtures, ten parity checks, five forced DGA
+  context restores, 65 worker-isolation checks, five safe REPL exits, and
+  motor/sensor safety checks passed.
+- Three-repetition calibration medians were 53,610 microseconds on COM3,
+  53,774 on COM11, 53,704 on COM12, 53,756 on COM13, and 53,756 on COM14.
+  Maximum deviation from the reference median was 0.272%, well inside the
+  required 5% tolerance.
+- Resumed `pololu_native_persistent_v8` on all five boards as hidden runner
+  PID 24280. The 63 previously completed trials, ten stopped timing-unusable
+  conditions, one complete condition, raw journals, and immutable manifest
+  were preserved. The three interrupted trials restarted at generation 2 on
+  their original boards.
+- Initial assignments after resume were Bayesian HIPC 50% on COM3, ACBBA
+  50% on COM11, CBAA 100% on COM12, CBAA 75% on COM13, and ACBBA 100% on
+  COM14. All five journals immediately recorded new generation-appropriate
+  allocator activity, the runner remained responsive, and its stderr log
+  remained empty.
