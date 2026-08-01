@@ -1,0 +1,26 @@
+{
+  "completed_jobs": 2,
+  "pending_jobs": 2,
+  "results": [
+    {
+      "condition_id": "bayesian_dga_fixed_k1_k1",
+      "event_cap": 15000,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/bayesian_trial_repair/logs/bayesian_dga_fixed_k1_k1_trial_493.log",
+      "out_dir": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/bayesian_trial_repair/bayesian_dga_fixed_k1_k1/trial_493_cap_15000",
+      "returncode": 0,
+      "trial_id": 493
+    },
+    {
+      "condition_id": "bayesian_dga_fixed_k1_k1",
+      "event_cap": 15000,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/bayesian_trial_repair/logs/bayesian_dga_fixed_k1_k1_trial_496.log",
+      "out_dir": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/bayesian_trial_repair/bayesian_dga_fixed_k1_k1/trial_496_cap_15000",
+      "returncode": 0,
+      "trial_id": 496
+    }
+  ],
+  "skipped_existing_jobs": 756,
+  "status": "complete",
+  "total_jobs": 758,
+  "updated_at_unix": 1785570775.6628678
+}

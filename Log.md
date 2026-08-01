@@ -2474,3 +2474,114 @@ save about 2.5–3.5 elapsed days, close to the ideal 33% reduction.
   board recovered cleanly and immediately claimed its next condition. At the
   monitored handoff there were three stopped, three running, and 96 pending
   conditions, with zero USB transport errors and an empty runner error log.
+
+## 2026-08-01 - Missing low-K simulation failure-rate investigation
+
+The HIL-aligned low-K simulation supplement in
+`results/hil_aligned_simulation/missing_lowk_full_counts/` finished all planned
+rows and passed `python -m hil_aligned_simulation.verify`. The row-complete
+matrix contains 10,200 system/trial rows: 18 Bayesian conditions at 500 trials
+each and 12 collaborative conditions at 100 trials each. Collaborative K=1 and
+K=2 had zero failures. All recorded failed trials are treated as the same
+non-completion/no-target-found outcome for this analysis.
+
+Observed low-K Bayesian failure rates:
+
+| Top-K condition | Failed / trials | Failure rate |
+| --- | ---: | ---: |
+| K=1 | 142 / 3000 | 4.73% |
+| 1% / K=4 | 8 / 3000 | 0.27% |
+| 3% / K=11 | 0 / 3000 | 0.00% |
+
+For comparison, the primary 5%-100% Bayesian Top-K campaign had only 5
+failures in 18,000 trials, or 0.028% overall. By Top-K level that campaign had
+1/3000 at 5%, 2/3000 at 10%, 0/3000 at 25%, 2/3000 at 50%, 0/3000 at 75%, and
+0/3000 at 100%.
+
+Bayesian failures by allocator and low-K condition:
+
+| Algorithm | K=1 failures | K=4 failures | K=11 failures |
+| --- | ---: | ---: | ---: |
+| CBAA | 1 / 500 | 0 / 500 | 0 / 500 |
+| ACBBA | 0 / 500 | 2 / 500 | 0 / 500 |
+| PI | 0 / 500 | 2 / 500 | 0 / 500 |
+| HIPC | 44 / 500 | 4 / 500 | 0 / 500 |
+| DMCHBA | 54 / 500 | 0 / 500 | 0 / 500 |
+| DGA | 43 / 500 | 0 / 500 | 0 / 500 |
+
+Mechanism found: the increase is a real low-K allocator interaction, not a
+timing-instrumentation or output-generation issue. The shared Top-K filter ranks
+candidate cells by posterior probability, then distance from the robot, then
+cell coordinate, and truncates to the candidate limit in
+`simulator/benchmark_sim/algorithms/base.py:139-157`. At K=1 this collapses
+hundreds of valid unsearched cells down to one locally preferred posterior cell
+after clue observation.
+
+That filtered list is not used the same way by every allocator. CBAA, ACBBA,
+and PI mostly use the filtered list to make or maintain this robot's own claim
+or bundle, so K=1 is severe but still usually leaves the current robot with a
+direct action. HIPC, DMCHBA, and DGA use the filtered list as the task pool for a
+local team allocation. HIPC builds a team plan from the filtered candidates and
+then keeps only this robot's slice
+(`simulator/benchmark_sim/algorithms/HIPC.py:117-123`,
+`simulator/benchmark_sim/algorithms/HIPC.py:192-258`). DMCHBA runs its matching
+over the filtered task list
+(`simulator/benchmark_sim/algorithms/DMCHBA.py:179-223`,
+`simulator/benchmark_sim/algorithms/DMCHBA.py:610-623`). DGA evolves and commits
+team plans over the filtered candidates
+(`simulator/benchmark_sim/algorithms/DGA.py:117-138`,
+`simulator/benchmark_sim/algorithms/DGA.py:504-521`).
+
+So K=1 is not "one candidate per robot" for those team allocators. It is one
+candidate for the whole local team during that allocation pass. With four
+robots, that means at most one robot can receive useful post-clue work from the
+team planner. If the single retained cell is assigned to a predicted peer,
+already searched, claimed, blocked, or simply not the target-bearing branch of a
+diffuse posterior map, the current robot can repeatedly return no goal. The
+robot core then waits instead of moving when `choose_goal()` returns no goal
+(`simulator/benchmark_sim/core/robot.py:291-327`). K=4 is the first tested value
+that can generally represent one candidate per robot in a four-robot local team;
+K=11 restores enough posterior diversity that the observed failures disappear.
+
+Targeted diagnostic evidence supports this mechanism. Trial 22 is an overlapping
+K=1 failure for the team planners and completes at K=4. For HIPC at K=1, the
+trace was dominated by no-goal returns, each robot saw roughly 199-201 valid
+candidates reduced to 1, and the local team plan put the lone retained candidate
+`(7,5)` on robot 03; the other robots held empty bundles. At K=4, the same
+scenario completed, robot 00 found the target at `(8,3)`, and the retained
+candidate set included enough alternatives for useful owned bundles. For DMCHBA
+at K=1, each robot saw roughly 244-245 valid candidates reduced to 1, the
+sampled assignments left every robot with zero committed tasks, and the inferred
+owner of the single retained task was always another robot. At K=4, the same
+scenario completed, all sampled robots had one assigned/committed task, and
+robot 03 found the target.
+
+Scenario geometry also matches that interpretation. The 76 unique trials that
+failed in at least one Bayesian K=1 condition had more dispersed and less
+target-local clues than K=1 trials with no failures: mean clue-to-target
+Manhattan distance was 11.23 versus 9.04, maximum clue-to-target distance was
+18.89 versus 15.40, mean clue x-span was 11.87 versus 10.16, and mean clue
+y-span was 12.22 versus 10.03. Target distance from the corner starts did not
+explain the pattern; the average target-to-start distance was effectively
+unchanged. The likely trigger is therefore posterior/candidate starvation from
+collapsing a diffuse belief field to one candidate, not simply targets being
+farther away. HIPC, DMCHBA, and DGA also fail on many of the same scenario IDs:
+HIPC K=1 and DMCHBA K=1 share 32 failed trials, HIPC K=1 and DGA K=1 share 28,
+and DMCHBA K=1 and DGA K=1 share 30. The repeated overlap across independent
+team-planning logic points to scenario-level low-K brittleness rather than
+random implementation noise.
+
+The completed-trial timing invariants still hold after the known-visit timing
+parity work: per-robot allocator time equals allocator-solve plus
+candidate-filter time, and system-level totals equal the sum of computational
+rows. The verifier intentionally applies candidate-filter positivity only to
+completed trials that actually entered the post-clue filtered allocation phase;
+some completed Bayesian trials never require post-clue filtering.
+
+Conclusion: the increased rate is primarily caused by the new K=1 and K=4
+stress points, especially K=1 candidate starvation under dispersed-clue
+posterior maps. The team allocators amplify the effect because the K retained
+cells are shared across a local team plan, not reserved per robot. K=11 already
+returns to the higher-Top-K failure behavior (0/3000), and collaborative K=1/K=2
+produced no failures because those known-target simulations do not have the same
+post-clue posterior-collapse mechanism.
