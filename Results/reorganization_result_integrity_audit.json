@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "description": "Post-reorganization content-hash audit of measured result artifacts.",
+  "pre_migration_inventory": {
+    "path": "C:\\Users\\lottj\\Desktop\\topk_reorganization_backup_20260802T091913\\pre_migration_inventory.csv",
+    "repository_file_count": 44573,
+    "repository_size_bytes": 7465303047,
+    "inventory_sha256": "8b133b49ed20a9213a9a9183b29ddf2eb5b77d6cd7de08857cdf787db19fb77c",
+    "result_file_count_excluding_python_cache": 44082,
+    "result_size_bytes_excluding_python_cache": 7456016965
+  },
+  "post_migration_hash_scan": {
+    "inventory_path": "C:\\Users\\lottj\\Desktop\\topk_reorganization_backup_20260802T091913\\post_migration_results_inventory.csv",
+    "result_files_scanned_before_device_build_reclassification": 44102,
+    "result_size_bytes_scanned": 7460835181,
+    "pre_migration_hashes_not_present": 44,
+    "classified_missing_hashes": {
+      "generated_device_build_artifacts_rebuilt_during_validation": 42,
+      "intentionally_rewritten_result_index_and_path_metadata": 2,
+      "unexplained_missing_measured_result_artifacts": 0
+    }
+  },
+  "generated_artifact_note": "The 42 rebuilt files were MicroPython device-build binaries or build metadata, not measured simulation or HIL result rows. Device builds were reclassified under Simulation/Architecture/allocator_replay/builds so future builds cannot mutate Results.",
+  "canonical_simulation_datasets": {
+    "bayesian": {
+      "rows": 27000,
+      "sha256": "9858e16967789bfcfdbf57dc1e54ed92bcf5f6fd248fe6d4b05838175f42fcce",
+      "matches_pre_migration": true
+    },
+    "collaborative": {
+      "rows": 4800,
+      "sha256": "1091cf34c6bdff7ae26a4455d01133a5ab94dbdc0e47b280b2a990b18f511fc1",
+      "matches_pre_migration": true
+    }
+  },
+  "published_bayesian_hil": {
+    "source_report_files_compared": 6,
+    "byte_for_byte_matches": 6,
+    "system_trial_rows": 793,
+    "robot_trial_rows": 3172,
+    "condition_rows": 48,
+    "failed_trial_rows": 3,
+    "invalid_analysis_rows": 0
+  },
+  "conclusion": "All measured simulation and HIL result artifacts survived the reorganization. No unexplained measured-result hash is missing."
+}

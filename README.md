@@ -1,29 +1,20 @@
 # Top-K Filtering Study
 
-This repository contains the reproducible study record for Top-K candidate
-filtering in two mission types:
+This repository separates experiment architecture from result artifacts for two
+mission types:
 
-- **Bayesian CLUE search:** robots search a grid after receiving probabilistic
-  clues about one target.
-- **Collaborative known-target visit:** robots coordinate visits to 50 known
-  targets.
-
-Start in [`results/`](results/README.md). It is organized for reviewing the
-completed experiments rather than for running simulators.
+- Bayesian CLUE search
+- Collaborative known-target visit
 
 ## Repository map
 
-- [`results/`](results/README.md): published campaign outputs, scenarios,
-  validation evidence, and a guide to every result folder.
-- [`sensitivity_suite/`](sensitivity_suite/README.md): code that prepares,
-  verifies, and reports the 324-condition sensitivity campaign.
-- [`simulator/`](simulator/README.md): Bayesian CLUE-search simulator only.
-- [`hardware/`](hardware/README.md): current Pololu hardware programs and
-  manual test workflow.
-- [`allocator_replay/`](allocator_replay/README.md): host and device tooling
-  for replaying allocator calls on Pololus.
-- [`archive/`](archive/): superseded prototypes retained for reference.
-- [`Log.md`](Log.md): chronological technical record and validation notes.
+- [`Simulation/`](Simulation/README.md): pure simulation, HIL host/device
+  architecture, study workflows, and archived implementations.
+- [`Hardware/`](Hardware/README.md): physical-robot algorithms, firmware,
+  metrics hubs, and trial utilities.
+- [`Results/`](Results/README.md): published datasets, raw campaign records,
+  validation evidence, and analysis outputs.
+- [`Tests/`](Tests/README.md): simulation, HIL, and hardware tests.
+- [`Log.md`](Log.md): chronological technical and validation record.
 
-The collaborative simulator itself remains in its separate repository. It is
-not needed to inspect the collaborative results committed here.
+The fastest route to the completed data is [`Results/README.md`](Results/README.md).

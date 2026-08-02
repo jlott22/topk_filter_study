@@ -42,16 +42,20 @@ Thumbs.db
 *.eps
 
 # Transient simulator execution state (preserve scenario inputs and result data)
-/simulator/runs/**/logs/
-/simulator/runs/**/parts/
-/simulator/runs/**/archive/
-/simulator/runs/**/launcher.pid
-/simulator/runs/**/monitor_progress.py
-/simulator/runs/**/start_all_*.sh
-/simulator/runs/**/_trial_journal.jsonl
-/simulator/runs/**/_FAILED.txt
-/simulator/runs/**/_COMPLETE.txt
+/Simulation/Architecture/simulator/runs/**/logs/
+/Simulation/Architecture/simulator/runs/**/parts/
+/Simulation/Architecture/simulator/runs/**/archive/
+/Simulation/Architecture/simulator/runs/**/launcher.pid
+/Simulation/Architecture/simulator/runs/**/monitor_progress.py
+/Simulation/Architecture/simulator/runs/**/start_all_*.sh
+/Simulation/Architecture/simulator/runs/**/_trial_journal.jsonl
+/Simulation/Architecture/simulator/runs/**/_FAILED.txt
+/Simulation/Architecture/simulator/runs/**/_COMPLETE.txt
 
 # Generated hardware replay captures and partial sensitivity shards remain local.
-/results/allocator_replay/
-/results/sensitivity_suite/_cv100/
+/Results/HIL/AllocatorReplay/
+/Results/Simulation/Sensitivity/_cv100/
+/Simulation/Architecture/allocator_replay/builds/
+
+# Local junction to the separately versioned collaborative simulator repository.
+/Simulation/dcta_benchmark_sim/

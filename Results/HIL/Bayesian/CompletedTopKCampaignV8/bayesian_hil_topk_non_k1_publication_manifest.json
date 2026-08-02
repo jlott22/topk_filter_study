@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "campaign_id": "pololu_native_persistent_v8",
+  "mission": "bayesian",
+  "publication_status": "terminal_with_capped_conditions",
+  "scope": "Bayesian HIL Top-K conditions excluding K=1",
+  "coverage": {
+    "terminal_condition_count": 48,
+    "complete_condition_count": 29,
+    "completed_with_trial_failures_condition_count": 2,
+    "timing_cap_stopped_condition_count": 17,
+    "excluded_k1_condition_count": 6,
+    "successful_system_trial_count": 793,
+    "successful_robot_trial_row_count": 3172,
+    "failed_trial_count": 3,
+    "watchdog_threshold_adjustment_count": 1,
+    "timing_cap_seconds_per_allocator_call": 30
+  },
+  "notes": [
+    "Terminal does not mean every condition passed.",
+    "DGA has no successful HIL trials because every non-K=1 DGA condition exceeded the timing cap.",
+    "The collaborative portion of campaign V8 is incomplete and is not included in this publication."
+  ],
+  "files": [
+    {
+      "name": "bayesian_hil_topk_non_k1_condition_aggregate_metrics.csv",
+      "bytes": 54856,
+      "sha256": "652e45af0398630482bd840650e54e25db93d2b696b7281d6fa554a4ad23b3ac",
+      "description": "One row per terminal non-K=1 Bayesian HIL condition with status, stop reason, planned/completed/failed trial counts, timing distributions, and provenance hashes."
+    },
+    {
+      "name": "bayesian_hil_topk_non_k1_combined_trial_level_system_and_timing_results.csv",
+      "bytes": 1043956,
+      "sha256": "f6ad64fcfc90f40119ce512b25ae74e12f84054ff5ee4b101eabf6cdbea598b5",
+      "description": "Canonical combined HIL analysis CSV with one row per successful system trial, including team steps, maximum robot steps, allocator and filter timing, call classifications, and provenance."
+    },
+    {
+      "name": "bayesian_hil_topk_non_k1_robot_trial_timing_and_allocator_metrics.csv",
+      "bytes": 3697239,
+      "sha256": "c7ebb0a72ea98b6f7a3a9fedde8d80b65ae78eeeaa1aa9aceafee4da68cf817d",
+      "description": "Four device-level robot rows per successful system trial with per-robot allocator and candidate-filter timing."
+    },
+    {
+      "name": "bayesian_hil_topk_non_k1_failed_trial_log.csv",
+      "bytes": 4936,
+      "sha256": "70c955a512cf81ca4d6be9db36bc631ed757930626b6feb29d8c0b31fbe197ab",
+      "description": "Complete log of three Bayesian HIL trial failures with failure reasons and watchdog diagnostics."
+    },
+    {
+      "name": "bayesian_hil_topk_non_k1_watchdog_threshold_adjustment_log.csv",
+      "bytes": 1509,
+      "sha256": "01a812037c72b6efa1389323c06cf812df57eb3b53dcdbefe1adf462a24a838e",
+      "description": "One HIPC repeated-state watchdog threshold adjustment recorded during the Bayesian HIL segment."
+    },
+    {
+      "name": "bayesian_hil_topk_non_k1_dataset_verification_manifest.json",
+      "bytes": 2273,
+      "sha256": "ba61b56fd0e525ced91b7571a58b31235b0defdd2b41f996861c274804795560",
+      "description": "Original Bayesian-only report manifest with source report counts, checksums, and arithmetic verification checks."
+    }
+  ]
+}

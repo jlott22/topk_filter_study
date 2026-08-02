@@ -2754,3 +2754,33 @@ have no claimable trial remain available while another worker finishes the last
 Bayesian trial. This prevents four boards from exiting before the held
 collaborative queue is released. It does not resume or contact any board while
 the campaign is paused. The full desktop suite passes 111 tests.
+
+## 2026-08-02 - Repository and result publication reorganization
+
+The repository was reorganized into `Simulation/`, `Hardware/`, `Results/`,
+and `Tests/`, with this `Log.md` retained at the root. Generated MicroPython
+device builds were moved under the HIL architecture so future builds cannot
+mutate measured result folders.
+
+The canonical all-K simulation datasets are now published by mission under
+`Results/Simulation/Bayesian/Published/` and
+`Results/Simulation/Collaborative/Published/`. They retain all 27,000 Bayesian
+and 4,800 collaborative trial rows, including lower-K conditions, timing
+metrics, and maximum-step metrics. Regeneration from the relocated source
+records passed row-count, key, condition, source-preservation, timing, and
+maximum-step checks with zero mismatches.
+
+The Bayesian-only V8 HIL tables are published under
+`Results/HIL/Bayesian/CompletedTopKCampaignV8/`. The publication contains 48
+terminal non-K=1 condition rows, 793 successful system trials, 3,172 robot
+rows, three failed trials, and one watchdog-threshold adjustment. Seventeen
+conditions stopped at the 30-second timing cap, and all K=1 conditions remain
+explicitly excluded. The unfinished collaborative HIL records remain isolated
+under `Results/HIL/AllocatorReplay/ActiveCampaigns/` and were not merged into a
+completed result.
+
+A pre/post SHA-256 audit found no unexplained missing measured-result artifact.
+The canonical simulation CSV hashes match their pre-migration hashes, and all
+six copied Bayesian HIL source-report files match byte-for-byte. Validation
+passed 147 Bayesian simulation tests, 111 HIL tests, 12 hardware tests, and four
+sensitivity-suite tests.
