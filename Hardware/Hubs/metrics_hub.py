@@ -59,6 +59,22 @@ STUDY_MANIFEST_LOCK = os.path.abspath(
     )
 )
 OUT_DIR = "./hub_logs"
+PRIMARY_METRICS_FILENAME = "hardware_validation_metrics.csv"
+AUDIT_DIRNAME = "audit"
+ONBOARD_METRIC_FIELDS = [
+    "robot_id", "target_location", "alg", "steps", "msgs_sent",
+    "msgs_received", "1_rec", "1_sent", "2_rec", "2_sent", "3_rec",
+    "3_sent", "4_rec", "4_sent", "5_rec", "5_sent", "bytes_sent",
+    "bytes_received", "motor_time_ms", "compute_time_ms", "busy_ms",
+    "cpu_util_pct", "trial_time_ms", "candidate_filter_calls",
+    "candidate_filter_time_us_total", "candidate_filter_time_us_mean",
+    "candidate_filter_time_us_max", "allocator_calls",
+    "allocator_solve_time_us_total", "allocator_solve_time_us_mean",
+    "allocator_solve_time_us_max", "allocator_time_us_total",
+    "allocator_time_us_mean", "allocator_time_us_max", "allocator_time_pct",
+    "mem_used_peak", "mem_free_min", "task_cell_replans", "path_replans",
+    "collision_prevention_events",
+]
 VALID_DIGITS = set("123456")
 TOPIC_CATEGORY = {
     "1": "state", "2": "collision_intent", "3": "allocation_primary",
@@ -356,6 +372,26 @@ def csv_append(path: str, header: List[str], rows: Iterable[Iterable[object]]) -
         if header_needed:
             writer.writerow(header)
         writer.writerows(rows)
+
+
+def dict_csv_append(path: str, fieldnames: List[str], row: Dict[str, object]) -> None:
+    """Append one fixed-schema row and reject accidental schema drift."""
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    header_needed = not os.path.exists(path) or os.path.getsize(path) == 0
+    if not header_needed:
+        with open(path, newline="") as stream:
+            existing = next(csv.reader(stream), [])
+        if existing != fieldnames:
+            raise ConfigurationError(
+                f"existing primary metrics schema does not match {path}; "
+                "use a new --out-dir or move the older CSV"
+            )
+    with open(path, "a", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        if header_needed:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def parse_ids(value: str) -> List[str]:
@@ -1414,6 +1450,17 @@ class Hub:
 
     def run(self):
         os.makedirs(self.args.out_dir, exist_ok=True)
+        print(
+            "[OUTPUT] primary={}".format(
+                os.path.abspath(
+                    os.path.join(
+                        self.args.out_dir,
+                        PRIMARY_METRICS_FILENAME,
+                    )
+                )
+            ),
+            flush=True,
+        )
         self.client.connect(self.args.broker, self.args.port, keepalive=10)
         self.client.loop_start()
         if not self.connected.wait(self.args.connect_timeout):
@@ -1572,9 +1619,26 @@ class Hub:
                     time.sleep(self.args.drain_seconds)
                     memory_error = self.prompt_memory_error()
                     record_memory_error_result(trial, memory_error)
-                    self.write_trial(trial)
-                    self.import_onboard(trial)
-                    print(f"[SAVED] run={run_id}")
+                    try:
+                        onboard_rows = self.import_onboard(trial)
+                    except Exception as error:
+                        onboard_rows = {}
+                        print(
+                            f"[WARN] onboard metric import failed: {error}",
+                            flush=True,
+                        )
+                    self.write_trial(trial, onboard_rows)
+                    print(
+                        "[SAVED] run={} file={}".format(
+                            run_id,
+                            os.path.abspath(
+                                os.path.join(
+                                    self.args.out_dir,
+                                    PRIMARY_METRICS_FILENAME,
+                                )
+                            ),
+                        )
+                    )
                     with self.condition:
                         self.trial = None
 
@@ -1589,8 +1653,13 @@ class Hub:
             self.client.loop_stop()
             self.client.disconnect()
 
-    def write_trial(self, trial: Trial):
+    def write_trial(
+        self,
+        trial: Trial,
+        onboard_rows: Optional[Dict[str, Dict[str, str]]] = None,
+    ):
         prefix = os.path.join(self.args.out_dir, self.args.algorithm)
+        onboard_rows = onboard_rows or {}
         total_steps = sum(r.steps for r in trial.robots.values())
         pre_steps = sum(r.pre_steps for r in trial.robots.values())
         post_steps = sum(r.post_steps for r in trial.robots.values())
@@ -1617,6 +1686,8 @@ class Hub:
             "unprotected_messages_sent_total", "core_messages_sent_total",
             "allocation_messages_sent_total", "post_clue_messages_sent_total",
             "post_clue_allocation_messages_sent_total", "messages_sent_by_topic",
+            "max_steps_any_robot", "max_messages_any_robot", "event_count",
+            "onboard_rows_imported",
             "workload_gini_unique_cells_contributed",
         ]
         reported = trial.reported_target
@@ -1641,9 +1712,14 @@ class Hub:
             message_total * max(0, len(self.ids) - 1), categories["protected"],
             categories["unprotected"], categories["core"], categories["allocation"],
             post_total, post_allocation, category_string(trial.messages),
+            max((robot.steps for robot in trial.robots.values()), default=0),
+            max(
+                (sum(robot.messages.values()) for robot in trial.robots.values()),
+                default=0,
+            ),
+            len(trial.events), len(onboard_rows),
             gini(r.unique for r in trial.robots.values()),
         ]
-        csv_append(prefix + "_sys.csv", sys_header, [sys_row])
 
         robot_header = [
             "run_id", "trial_id", "source_trial_id",
@@ -1683,17 +1759,50 @@ class Hub:
                 robot.last_pos[0] if robot.last_pos else "",
                 robot.last_pos[1] if robot.last_pos else "",
             ])
-        csv_append(prefix + "_robots.csv", robot_header, robot_rows)
-        csv_append(prefix + "_events.csv", [
+        if getattr(self.args, "legacy_split_csvs", False):
+            csv_append(prefix + "_sys.csv", sys_header, [sys_row])
+            csv_append(prefix + "_robots.csv", robot_header, robot_rows)
+
+        audit_dir = os.path.join(self.args.out_dir, AUDIT_DIRNAME)
+        csv_append(os.path.join(audit_dir, f"{self.args.algorithm}_events.csv"), [
             "run_id", "trial_id", "source_trial_id",
             "wall_time_s", "relative_time_s", "phase",
             "robot_id", "topic_digit", "category", "payload", "x", "y",
         ], trial.events)
 
-    def import_onboard(self, trial: Trial):
+        system_record = dict(zip(sys_header, sys_row))
+        robot_records = {
+            str(row[robot_header.index("robot_id")]): dict(zip(robot_header, row))
+            for row in robot_rows
+        }
+        combined_fields = list(sys_header)
+        combined_row: Dict[str, object] = dict(system_record)
+        robot_metric_fields = robot_header[
+            robot_header.index("robot_id") + 1:
+        ]
+        for robot_id in ROBOT_IDS:
+            record = robot_records.get(robot_id, {})
+            for field in robot_metric_fields:
+                name = f"robot_{robot_id}_{field}"
+                combined_fields.append(name)
+                combined_row[name] = record.get(field, "")
+        for robot_id in ROBOT_IDS:
+            record = onboard_rows.get(robot_id, {})
+            for field in ONBOARD_METRIC_FIELDS:
+                name = f"onboard_{robot_id}_{field}"
+                combined_fields.append(name)
+                combined_row[name] = record.get(field, "")
+        dict_csv_append(
+            os.path.join(self.args.out_dir, PRIMARY_METRICS_FILENAME),
+            combined_fields,
+            combined_row,
+        )
+
+    def import_onboard(self, trial: Trial) -> Dict[str, Dict[str, str]]:
         if not self.args.robot_metrics_root:
-            return
+            return {}
         rows, fields = [], set()
+        by_robot: Dict[str, Dict[str, str]] = {}
         for rid in self.ids:
             path = os.path.join(self.args.robot_metrics_root, rid, f"metrics-log-{self.args.algorithm}.txt")
             if not os.path.exists(path):
@@ -1719,20 +1828,26 @@ class Hub:
                 "source_robot_id": rid,
             })
             rows.append(row)
+            by_robot[rid] = row
             fields.update(row)
         if not rows:
-            return
+            return {}
         preferred = [
             "run_id", "trial_id", "source_trial_id", "source_robot_id"
         ]
         names = preferred + sorted(fields - set(preferred))
-        path = os.path.join(self.args.out_dir, f"{self.args.algorithm}_onboard.csv")
-        write_header = not os.path.exists(path) or os.path.getsize(path) == 0
-        with open(path, "a", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=names)
-            if write_header:
-                writer.writeheader()
-            writer.writerows(rows)
+        if getattr(self.args, "legacy_split_csvs", False):
+            path = os.path.join(
+                self.args.out_dir,
+                f"{self.args.algorithm}_onboard.csv",
+            )
+            write_header = not os.path.exists(path) or os.path.getsize(path) == 0
+            with open(path, "a", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=names)
+                if write_header:
+                    writer.writeheader()
+                writer.writerows(rows)
+        return by_robot
 
     def onboard_counts(self) -> Dict[str, int]:
         if not self.args.robot_metrics_root:
@@ -1752,7 +1867,9 @@ class Hub:
         return counts
 
     def write_commands(self):
-        csv_append(os.path.join(self.args.out_dir, f"{self.args.algorithm}_commands.csv"),
+        csv_append(os.path.join(
+                       self.args.out_dir, AUDIT_DIRNAME,
+                       f"{self.args.algorithm}_commands.csv"),
                    [
                        "wall_time_s", "run_id", "trial_id",
                        "source_trial_id", "kind", "topic", "payload",
@@ -1763,6 +1880,7 @@ class Hub:
         csv_append(
             os.path.join(
                 self.args.out_dir,
+                AUDIT_DIRNAME,
                 f"{self.args.algorithm}_configuration_acks.csv",
             ),
             [
@@ -1780,6 +1898,7 @@ class Hub:
         csv_append(
             os.path.join(
                 self.args.out_dir,
+                AUDIT_DIRNAME,
                 f"{self.args.algorithm}_control_acks.csv",
             ),
             [
@@ -1858,6 +1977,14 @@ def parser():
         help="number of manually operated trials",
     )
     result.add_argument("--out-dir", default=OUT_DIR)
+    result.add_argument(
+        "--legacy-split-csvs",
+        action="store_true",
+        help=(
+            "also write the former per-algorithm system, robot, and onboard "
+            "metric CSVs; the combined trial-level CSV remains authoritative"
+        ),
+    )
     result.add_argument("--connect-timeout", type=float, default=15)
     result.add_argument("--ready-timeout", type=float, default=300)
     result.add_argument("--quiet-window", type=float, default=1)

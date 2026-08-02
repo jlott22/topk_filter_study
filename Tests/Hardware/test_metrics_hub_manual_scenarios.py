@@ -172,10 +172,10 @@ class ManualScenarioTests(unittest.TestCase):
 
         hub.wait_target = finish
         hub.prompt_memory_error = lambda: False
-        hub.write_trial = lambda trial: saved.append(
+        hub.write_trial = lambda trial, onboard_rows=None: saved.append(
             (trial.scenario.trial_id, trial.status)
         )
-        hub.import_onboard = lambda _trial: None
+        hub.import_onboard = lambda _trial: {}
         hub.write_commands = lambda: None
         hub.write_config_acks = lambda: None
         hub.write_control_acks = lambda: None
@@ -244,7 +244,7 @@ class ManualScenarioTests(unittest.TestCase):
         self.assertEqual(len(trial.location_warnings), 2)
         self.assertIn("[LOCATION WARNING]", output.getvalue())
 
-    def test_system_robot_and_event_csvs_include_source_id_and_warnings(self):
+    def test_combined_trial_and_audit_event_csvs_include_source_id_and_warnings(self):
         scenario = cohort()[0]
         robots = {
             robot_id: metrics_hub.RobotState(
@@ -278,28 +278,24 @@ class ManualScenarioTests(unittest.TestCase):
             hub.ids = list(metrics_hub.ROBOT_IDS)
             hub.write_trial(trial)
             with open(
-                Path(temporary) / "DGA_sys.csv",
+                Path(temporary) / metrics_hub.PRIMARY_METRICS_FILENAME,
                 newline="",
             ) as stream:
-                system_rows = list(csv.DictReader(stream))
+                combined_rows = list(csv.DictReader(stream))
             with open(
-                Path(temporary) / "DGA_robots.csv",
-                newline="",
-            ) as stream:
-                robot_rows = list(csv.DictReader(stream))
-            with open(
-                Path(temporary) / "DGA_events.csv",
+                Path(temporary) / metrics_hub.AUDIT_DIRNAME / "DGA_events.csv",
                 newline="",
             ) as stream:
                 event = next(csv.DictReader(stream))
-        self.assertEqual(len(system_rows), 1)
-        self.assertEqual(len(robot_rows), 4)
-        system = system_rows[0]
-        for row in (system, *robot_rows, event):
+        self.assertEqual(len(combined_rows), 1)
+        system = combined_rows[0]
+        for row in (system, event):
             self.assertEqual(row["trial_id"], "1")
             self.assertEqual(row["source_trial_id"], "4")
         self.assertEqual(system["unexpected_clues"], "18/18")
         self.assertIn("unexpected clue", system["location_warning"])
+        self.assertEqual(system["robot_00_last_x"], "0")
+        self.assertEqual(system["robot_03_last_y"], "18")
 
     def test_commands_acknowledgments_and_onboard_csvs_include_both_ids(self):
         scenario = cohort()[1]
@@ -343,18 +339,58 @@ class ManualScenarioTests(unittest.TestCase):
             hub.write_commands()
             hub.write_config_acks()
             hub.write_control_acks()
-            hub.import_onboard(trial)
+            onboard_rows = hub.import_onboard(trial)
+            hub.write_trial(trial, onboard_rows)
 
             for name in (
                 "DGA_commands.csv",
                 "DGA_configuration_acks.csv",
                 "DGA_control_acks.csv",
-                "DGA_onboard.csv",
             ):
-                with (root / name).open(newline="") as stream:
+                with (
+                    root / metrics_hub.AUDIT_DIRNAME / name
+                ).open(newline="") as stream:
                     row = next(csv.DictReader(stream))
                 self.assertEqual(row["trial_id"], "2", name)
                 self.assertEqual(row["source_trial_id"], "53", name)
+            with (
+                root / metrics_hub.PRIMARY_METRICS_FILENAME
+            ).open(newline="") as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual(row["onboard_00_steps"], "7")
+            self.assertEqual(row["onboard_rows_imported"], "1")
+
+    def test_combined_csv_appends_trials_and_algorithms_to_one_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, algorithm in enumerate(("CBAA", "PI"), start=1):
+                scenario = cohort()[index - 1]
+                trial = metrics_hub.Trial(
+                    f"run-{index}",
+                    scenario,
+                    {
+                        robot_id: metrics_hub.RobotState(
+                            last_pos=metrics_hub.HOME[robot_id]
+                        )
+                        for robot_id in metrics_hub.ROBOT_IDS
+                    },
+                )
+                trial.status = "completed"
+                hub = object.__new__(metrics_hub.Hub)
+                hub.args = SimpleNamespace(
+                    out_dir=temporary,
+                    algorithm=algorithm,
+                )
+                hub.ids = list(metrics_hub.ROBOT_IDS)
+                hub.write_trial(trial)
+
+            path = Path(temporary) / metrics_hub.PRIMARY_METRICS_FILENAME
+            with path.open(newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(len(rows), 2)
+            self.assertEqual([row["algorithm"] for row in rows], ["CBAA", "PI"])
+            self.assertEqual([row["source_trial_id"] for row in rows], ["4", "53"])
+            self.assertFalse((Path(temporary) / "CBAA_sys.csv").exists())
+            self.assertFalse((Path(temporary) / "PI_sys.csv").exists())
 
     def test_control_boundaries_and_pending_metric_replay(self):
         hub = object.__new__(metrics_hub.Hub)

@@ -2784,3 +2784,23 @@ The canonical simulation CSV hashes match their pre-migration hashes, and all
 six copied Bayesian HIL source-report files match byte-for-byte. Validation
 passed 147 Bayesian simulation tests, 111 HIL tests, 12 hardware tests, and four
 sensitivity-suite tests.
+
+## 2026-08-02 - Consolidated physical-validation hub metrics
+
+The physical `Hardware/Hubs/metrics_hub.py` output was changed from several
+per-algorithm metric CSVs to one authoritative
+`hardware_validation_metrics.csv`. The file has one row per trial and appends
+across algorithms, Top-K values, and source episodes. System fields remain
+unprefixed; host-derived robot fields use `robot_00_` through `robot_03_`; and
+imported Pololu timing, memory, CPU, motor, message, and replanning fields use
+`onboard_00_` through `onboard_03_`. The hub rejects an existing primary CSV
+whose header differs, preventing silent column misalignment.
+
+Variable-length events, commands, and configuration/control acknowledgments
+remain separate audit evidence under the output directory's `audit/` folder.
+The former split system, robot, and onboard metric CSVs are available only
+with `--legacy-split-csvs`. Startup and per-trial save messages now print the
+absolute primary CSV path. Focused verification passed 13 tests, including
+two algorithms and repeated trials appending to one file, onboard metric
+flattening, audit routing, scenario identity, and all six Pololu timing
+exports.

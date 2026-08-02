@@ -227,10 +227,18 @@ steps after termination.
 
 ## Metrics Output
 
-`metrics_hub.py` writes CSV files to `hub_logs/`:
+`metrics_hub.py` writes one primary CSV to `hub_logs/` by default:
 
-- `<alg>_sys.csv` - one system-level row per trial.
-- `<alg>_robots.csv` - one row per robot per trial.
+- `hardware_validation_metrics.csv` - one row per trial, appended across all
+  algorithms, Top-K settings, and source episodes. System metrics appear once;
+  per-robot metrics use `robot_00_` through `robot_03_` prefixes; imported
+  onboard timing and memory metrics use `onboard_00_` through `onboard_03_`.
+
+The hub prints the absolute primary CSV path at startup and again after every
+saved trial. Variable-length event, command, configuration-acknowledgment, and
+control-acknowledgment records are retained under `hub_logs/audit/`; they are
+audit evidence rather than fixed trial metrics. Use `--legacy-split-csvs` only
+when the former per-algorithm system, robot, and onboard CSVs are also needed.
 
 System metrics include:
 
