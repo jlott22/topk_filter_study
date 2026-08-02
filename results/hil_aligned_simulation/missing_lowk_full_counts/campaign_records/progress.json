@@ -1,0 +1,208 @@
+{
+  "completed_conditions": 25,
+  "results": [
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_dmchba_fixed_k2_k2",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_dmchba_fixed_k2_k2.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_cbaa_fixed_k2_k2",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_cbaa_fixed_k2_k2.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_cbaa_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_cbaa_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_hipc_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_hipc_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_acbba_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_acbba_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_acbba_fixed_k2_k2",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_acbba_fixed_k2_k2.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_hipc_fixed_k2_k2",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_hipc_fixed_k2_k2.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_dmchba_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_dmchba_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_pi_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_pi_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_pi_fixed_k2_k2",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_pi_fixed_k2_k2.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_dmchba_topk_003_k11",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_dmchba_topk_003_k11.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_pi_topk_003_k11",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_pi_topk_003_k11.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_hipc_topk_003_k11",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_hipc_topk_003_k11.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_dmchba_topk_001_k4",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_dmchba_topk_001_k4.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_cbaa_topk_003_k11",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_cbaa_topk_003_k11.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_acbba_topk_003_k11",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_acbba_topk_003_k11.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_acbba_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_acbba_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_pi_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_pi_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 4,
+      "condition_id": "bayesian_pi_topk_001_k4",
+      "error": "",
+      "failed_trials_after_retry": 2,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_pi_topk_001_k4.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 4,
+      "condition_id": "bayesian_acbba_topk_001_k4",
+      "error": "",
+      "failed_trials_after_retry": 2,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_acbba_topk_001_k4.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "bayesian_cbaa_topk_001_k4",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_cbaa_topk_001_k4.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 4,
+      "condition_id": "bayesian_hipc_topk_001_k4",
+      "error": "",
+      "failed_trials_after_retry": 4,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_hipc_topk_001_k4.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 4,
+      "condition_id": "bayesian_cbaa_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 1,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/bayesian_cbaa_fixed_k1_k1.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_dga_fixed_k2_k2",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_dga_fixed_k2_k2.log",
+      "returncode": 0
+    },
+    {
+      "attempts": 1,
+      "condition_id": "collaborative_dga_fixed_k1_k1",
+      "error": "",
+      "failed_trials_after_retry": 0,
+      "log_path": "/home/agxorin/topk_filter_study/results/hil_aligned_simulation/missing_lowk_full_counts/campaign_records/logs/collaborative_dga_fixed_k1_k1.log",
+      "returncode": 0
+    }
+  ],
+  "status": "running",
+  "total_conditions": 30,
+  "updated_at_unix": 1785560820.3100495
+}
