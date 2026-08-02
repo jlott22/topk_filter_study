@@ -1,0 +1,6 @@
+physical_source_episode,physical_target_location,physical_clue_locations,exact_content_match_count,exact_content_hil_trial_ids,target_only_match_count,target_only_hil_trial_ids,identity_conclusion
+4,5/9,5/7;1/2;17/13;7/7,0,,1,371,no_identical_hil_scenario
+53,7/2,6/1;16/16;6/0;1/8,0,,0,,no_identical_hil_scenario
+232,3/11,4/12;15/17;5/18;2/11,0,,0,,no_identical_hil_scenario
+394,5/4,4/3;4/4;2/6;6/4,0,,0,,no_identical_hil_scenario
+473,13/16,17/2;8/11;14/15;14/17,0,,1,67,no_identical_hil_scenario

@@ -2804,3 +2804,55 @@ absolute primary CSV path. Focused verification passed 13 tests, including
 two algorithms and repeated trials appending to one file, onboard metric
 flattening, audit routing, scenario identity, and all six Pololu timing
 exports.
+
+## 2026-08-02 - Physical robot log recovery and robot 02 boot repair
+
+Recovered and formally organized the physical-trial onboard logs from robots
+00, 01, 02, and 03 under `Results/Hardware/PhysicalTrials/Robots/`. Each robot
+now has canonical metric files, row counts, hashes, a machine-readable
+manifest, and dated forensic evidence. Complete mounted-volume snapshots and
+15,728,640-byte read-only flash images were captured for robots 00, 01, and 03
+before cleanup; robot 02's equivalent pre-repair image and recovery bundle had
+already been secured. Every accessible source file matched its snapshot.
+
+Robot 02's failure was recurring FAT12 root-directory corruption, not failed
+firmware. The image showed the first 128 root slots erased, and MicroPython
+omitted `main.py` and most deployment files even though Windows exposed a
+partial volume. The current repository source did not reproduce the deployed
+bytecode and was rejected for repair. Instead, all six original ID-02
+`Pololu_*.mpy` programs were recovered from intact unallocated image clusters.
+After formatting only robot 02's 15 MB user filesystem, a 63-file factory,
+menu, and production payload was restored and matched byte-for-byte. A clean
+filesystem scan passed, MicroPython listed all 36 expected root entries, and
+automatic startup remained in the splash/menu for six seconds without an
+exception. Firmware was not reflashed and motors were explicitly commanded to
+zero during verification.
+
+After all repository copies passed final SHA-256 checks, 17 remaining log
+files were removed explicitly from robots 00, 01, and 03; robot 02's two active
+logs were removed by its verified filesystem rebuild. A post-cleanup recursive
+enumeration found zero filenames containing `log` on all four robots. The
+removal audit is `Results/Hardware/PhysicalTrials/robot_log_cleanup_2026-08-02.csv`;
+all data remains recoverable from canonical copies, full snapshots, and raw
+flash images.
+
+## 2026-08-02 - Completed physical-trial metrics capture
+
+After the remaining physical trials finished, copied every current onboard log
+and complete mounted filesystem from robots 00 through 03 into immutable
+`captures/2026-08-02_completed_trials/` directories. The four snapshots contain
+600 files. File-for-file comparison against the still-connected robot volumes
+found no missing files, extra files, or SHA-256 mismatches.
+
+The final robot volumes contributed 44 new rows: 21 HIPC and 23 PI. These were
+combined with the 82 previously recovered rows into
+`Results/Hardware/PhysicalTrials/Completed/all_robots_all_algorithms.csv`, for
+126 total rows. No repeated trial or error row was removed. Nine raw rows had
+an unquoted `(-1, -1)` target location; the derived CSV losslessly merged those
+two fragments and records the repair, source file, source line, source hash,
+original field count, and raw-row hash. Original robot bytes remain unchanged.
+
+The completed observed coverage is ACBBA 24 rows, CBAA 27, DMCHBA 23, HIPC
+29, and PI 23. No DGA metric log exists in either capture on any of the four
+robots, so coverage and a header-only DGA export explicitly record the absence
+instead of fabricating or inferring trials.

@@ -27,6 +27,7 @@ Thumbs.db
 *.temp
 *.log
 *~
+~$*.xlsx
 
 # Generated figures and image artifacts
 *.fig

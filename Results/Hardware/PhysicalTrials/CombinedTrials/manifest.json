@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "input": "Results/Hardware/PhysicalTrials/Completed/all_robots_all_algorithms.csv",
+  "input_sha256": "DBFD47923E261A02EB87DBA9838B803E1DE431AD137A64687F10C956D0DC2B2F",
+  "declared_trial_mapping": [
+    {
+      "trial_number": 1,
+      "target_location": "5/9",
+      "source_episode": "4"
+    },
+    {
+      "trial_number": 2,
+      "target_location": "7/2",
+      "source_episode": "53"
+    },
+    {
+      "trial_number": 3,
+      "target_location": "3/11",
+      "source_episode": "232"
+    },
+    {
+      "trial_number": 4,
+      "target_location": "5/4",
+      "source_episode": "394"
+    },
+    {
+      "trial_number": 5,
+      "target_location": "13/16",
+      "source_episode": "473"
+    }
+  ],
+  "matching_policy": {
+    "required_robot_ids": [
+      "00",
+      "01",
+      "02",
+      "03"
+    ],
+    "required_rows_per_group": 4,
+    "nonstudy_targets": "excluded",
+    "incomplete_groups": "excluded",
+    "operator_rejected_trials": [
+      "ACBBA 2A",
+      "HIPC 2A"
+    ],
+    "validated_trial_2_labels": [
+      "ACBBA 2",
+      "HIPC 2"
+    ],
+    "dmchba_trial_3": "minimum_four_robot_trial_time_range_and_flagged"
+  },
+  "combined_trial_rows": 25,
+  "matched_source_rows": 100,
+  "excluded_source_rows": 26,
+  "review_flagged_trials": 2,
+  "unaccounted_source_rows": 0,
+  "outputs": [
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/combined_metrics_per_trial.csv",
+      "bytes": 14444,
+      "sha256": "DF8A9FA1E1F73BF531BA4F7DF433F7CF8795CC9CB0FAF1538030381B4A5BCC9C"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/matched_robot_rows.csv",
+      "bytes": 54501,
+      "sha256": "CC9AF89163E3E87973D16C41DD559F6231D45D5CCB1F4A465A0B8D8E87A0A9A4"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/excluded_trial_remnants.csv",
+      "bytes": 16199,
+      "sha256": "8489AE8EDC8EF08A3F76D65388FE778F8D642E99CEF54EAB925DF2A403806978"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/review_flags.csv",
+      "bytes": 2468,
+      "sha256": "6D6F0B8D522B757E6B3800E95E61BCB5482BB2D4F940BB4928244270699F557C"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/README.md",
+      "bytes": 1164,
+      "sha256": "723DAD94989E2ADE3507FC62079006B459242DC40D280393501973720630FAFF"
+    }
+  ]
+}

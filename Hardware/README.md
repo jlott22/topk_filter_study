@@ -27,6 +27,12 @@ Hardware-side scripts and firmware for running decentralized task-cell allocatio
   programs.
 - `Firmware/ESP32MetricsHub/` - ESP32 bridge between Pololu UART frames and MQTT topics.
 - `Hubs/metrics_hub.py` - MQTT metrics collector and trial controller.
+- `Diagnostics/build_completed_physical_metrics.py` - consolidates raw onboard
+  metrics when external source captures are available.
+- `Diagnostics/build_combined_physical_trials.py` - validates and aggregates
+  the consolidated physical results.
+- `Diagnostics/compare_physical_hil_timings.py` - rebuilds the retained
+  physical-versus-HIL comparison tables.
 - `../Simulation/Architecture/simulator/scenarios/final_trial_500.csv` - canonical validated study
   scenario manifest used by the hub by default.
 - `../Results/Hardware/PilotTrials/legacy_clue_trials_g19_c4*` - historical generated trial artifacts; these

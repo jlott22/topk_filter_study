@@ -1,0 +1,6 @@
+algorithm,top_k_rate,top_k_cells,physical_trial_count,hil_trial_count,physical_source_episode_ids,hil_trial_ids,exact_scenario_overlap_count,overlapping_scenario_ids,hil_condition_id,comparison_design
+ACBBA,0.1,36,5,25,4;53;232;394;473,7;12;32;45;50;56;67;80;94;108;127;132;164;166;178;216;226;233;274;313;358;371;388;398;424,0,,bayesian_acbba_topk_010_k36,unpaired_same_algorithm_topk_different_scenarios
+CBAA,0.03,11,5,25,4;53;232;394;473,7;12;32;45;50;56;67;80;94;108;127;132;164;166;178;216;226;233;274;313;358;371;388;398;424,0,,bayesian_cbaa_topk_003_k11,unpaired_same_algorithm_topk_different_scenarios
+DMCHBA,0.05,18,5,25,4;53;232;394;473,7;12;32;45;50;56;67;80;94;108;127;132;164;166;178;216;226;233;274;313;358;371;388;398;424,0,,bayesian_dmchba_topk_005_k18,unpaired_same_algorithm_topk_different_scenarios
+HIPC,0.1,36,5,25,4;53;232;394;473,7;12;32;45;50;56;67;80;94;108;127;132;164;166;178;216;226;233;274;313;358;371;388;398;424,0,,bayesian_hipc_topk_010_k36,unpaired_same_algorithm_topk_different_scenarios
+PI,0.1,36,5,25,4;53;232;394;473,7;12;32;45;50;56;67;80;94;108;127;132;164;166;178;216;226;233;274;313;358;371;388;398;424,0,,bayesian_pi_topk_010_k36,unpaired_same_algorithm_topk_different_scenarios

@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "description": "Lossless completed physical-trial metrics; repeats and error rows retained",
+  "robot_ids": [
+    "00",
+    "01",
+    "02",
+    "03"
+  ],
+  "expected_algorithms": [
+    "ACBBA",
+    "CBAA",
+    "DGA",
+    "DMCHBA",
+    "HIPC",
+    "PI"
+  ],
+  "observed_algorithms": [
+    "ACBBA",
+    "CBAA",
+    "DMCHBA",
+    "HIPC",
+    "PI"
+  ],
+  "missing_source_logs": [
+    {
+      "robot_id": "00",
+      "algorithm": "DGA"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "DGA"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "DGA"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "DGA"
+    }
+  ],
+  "total_rows": 126,
+  "rows_by_robot": {
+    "00": 31,
+    "01": 31,
+    "02": 31,
+    "03": 33
+  },
+  "rows_by_algorithm": {
+    "ACBBA": 24,
+    "CBAA": 27,
+    "DMCHBA": 23,
+    "HIPC": 29,
+    "PI": 23
+  },
+  "rows_by_capture_batch": {
+    "completed_trials": 44,
+    "initial_recovery": 82
+  },
+  "structural_repairs": {
+    "merge_unquoted_target_location": 9,
+    "none": 117
+  },
+  "duplicates_removed": 0,
+  "error_rows_removed": 0,
+  "source_files": [
+    {
+      "robot_id": "00",
+      "algorithm": "ACBBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_00/metrics/onboard/metrics-log-ACBBA.txt",
+      "bytes": 2338,
+      "data_rows": 6,
+      "sha256": "197B552DF9C58186A9D2ED97C396E35EC428577DEF5C84A2906F247C4773F89A"
+    },
+    {
+      "robot_id": "00",
+      "algorithm": "CBAA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_00/metrics/onboard/metrics-log-CBAA.txt",
+      "bytes": 2587,
+      "data_rows": 7,
+      "sha256": "7E0C4D24F6FF4C77213AA041825F55195315715A85220BBD124E584C31C89FB4"
+    },
+    {
+      "robot_id": "00",
+      "algorithm": "DMCHBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_00/metrics/onboard/metrics-log-DMCHBA.txt",
+      "bytes": 2024,
+      "data_rows": 5,
+      "sha256": "8539042BE43B1518D60D83378BD2C5B4F83B1D9234AF08D6563FA003109015AC"
+    },
+    {
+      "robot_id": "00",
+      "algorithm": "HIPC",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_00/metrics/onboard/metrics-log-HIPC.txt",
+      "bytes": 1208,
+      "data_rows": 2,
+      "sha256": "EEF42B6CBEC55D5A3DB7EDC75F75A59D56010D2F74AA4F56B49C55D84002CA93"
+    },
+    {
+      "robot_id": "00",
+      "algorithm": "HIPC",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_00/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-HIPC.txt",
+      "bytes": 2045,
+      "data_rows": 5,
+      "sha256": "486F7D94784CD714364BE0B25B21CFA907334F2F34A0BC2771196434687133FC"
+    },
+    {
+      "robot_id": "00",
+      "algorithm": "PI",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_00/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-PI.txt",
+      "bytes": 2308,
+      "data_rows": 6,
+      "sha256": "3137469E96C32825E39FB48C97E4215C0A739C423CF25AB5C9BA603DF7284A71"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "ACBBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_01/metrics/onboard/metrics-log-ACBBA.txt",
+      "bytes": 2336,
+      "data_rows": 6,
+      "sha256": "F5FF1938EA8DD151F2ED6D188A932A3D740F647A7B9448E49C6C3D01929EC354"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "CBAA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_01/metrics/onboard/metrics-log-CBAA.txt",
+      "bytes": 2544,
+      "data_rows": 7,
+      "sha256": "B9C2A751D568B800891908E6C7FBA77F3C2DD9D9767A139402B6A534EC015663"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "DMCHBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_01/metrics/onboard/metrics-log-DMCHBA.txt",
+      "bytes": 2290,
+      "data_rows": 6,
+      "sha256": "9DCCC8938D2E6D912BAA03F660D42EA3D69CAAF48997067CDDA4E9130CC4F089"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "HIPC",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_01/metrics/onboard/metrics-log-HIPC.txt",
+      "bytes": 1208,
+      "data_rows": 2,
+      "sha256": "2FE06A7BAF50CB83A2B7E8BB947C4CF80F86D8D2FB8FC5F0CCAB74D0F802EEFD"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "HIPC",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_01/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-HIPC.txt",
+      "bytes": 1722,
+      "data_rows": 4,
+      "sha256": "62F3BFDD69397A46865648867B30D607F73A0AFB17DAE3A5E77FCCE6FD10CC4F"
+    },
+    {
+      "robot_id": "01",
+      "algorithm": "PI",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_01/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-PI.txt",
+      "bytes": 2307,
+      "data_rows": 6,
+      "sha256": "195F5C285486A1DFEFE2D9DC20E067C9EDC55A681F8B1E0372B39F401317A468"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "ACBBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_02/metrics/onboard/metrics-log-ACBBA.txt",
+      "bytes": 2336,
+      "data_rows": 6,
+      "sha256": "CFD27D1FD794E07BC1AE62123251DA0CB63850B6D2D419A4B706F3E0AA526D30"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "CBAA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_02/metrics/onboard/metrics-log-CBAA.txt",
+      "bytes": 2294,
+      "data_rows": 6,
+      "sha256": "76258CF29D1B6D65EBDE97F1CF6206D7C7812EEE6A6A5D59D988F9B5AF6D1A6D"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "DMCHBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_02/metrics/onboard/metrics-log-DMCHBA.txt",
+      "bytes": 2292,
+      "data_rows": 6,
+      "sha256": "733512893E1E73CFF29CC4D408B906C9E72720BBC1335BD6C7D2052BD83A1FB7"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "HIPC",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_02/metrics/onboard/metrics-log-HIPC.txt",
+      "bytes": 1209,
+      "data_rows": 2,
+      "sha256": "3623414F32445584F8EE3154D128718DCB89EE1543B1C159CECA91AD819F95CD"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "HIPC",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_02/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-HIPC.txt",
+      "bytes": 2231,
+      "data_rows": 6,
+      "sha256": "0A778F09180B6A032B78AF48A6B7189F71710E0CE138B6ADF7FE3CFD8F279D54"
+    },
+    {
+      "robot_id": "02",
+      "algorithm": "PI",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_02/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-PI.txt",
+      "bytes": 2035,
+      "data_rows": 5,
+      "sha256": "9EACC046F85FAFC24A6C0AA6732D92CDE727E6F8C08C2392A2167453EF9ECD6C"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "ACBBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_03/metrics/onboard/metrics-log-ACBBA.txt",
+      "bytes": 2330,
+      "data_rows": 6,
+      "sha256": "5E43F710AA98AB1E83409F0820F3FBD35B7874A044CAF3A24114024A9D69EE85"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "CBAA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_03/metrics/onboard/metrics-log-CBAA.txt",
+      "bytes": 2579,
+      "data_rows": 7,
+      "sha256": "D561DB79918780B26F3FE24043CD23C0BE38C0757D38768779A35DF412A3230C"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "DMCHBA",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_03/metrics/onboard/metrics-log-DMCHBA.txt",
+      "bytes": 2300,
+      "data_rows": 6,
+      "sha256": "8DBB16BB92732553BEC25154C32E9648B118F220785AAD2E1538039153D89166"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "HIPC",
+      "capture_batch": "initial_recovery",
+      "path": "Robots/robot_03/metrics/onboard/metrics-log-HIPC.txt",
+      "bytes": 1208,
+      "data_rows": 2,
+      "sha256": "06C5C3ECE0B691F24E95A2F26C9EDDA0F4CF6709FF583567787BCE2B0638E794"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "HIPC",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_03/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-HIPC.txt",
+      "bytes": 2269,
+      "data_rows": 6,
+      "sha256": "74F77B9D538A1DB25DED045B40A5C9FF8A61A384C651132F4CA14EBA37919F3F"
+    },
+    {
+      "robot_id": "03",
+      "algorithm": "PI",
+      "capture_batch": "completed_trials",
+      "path": "Robots/robot_03/captures/2026-08-02_completed_trials/raw_onboard/metrics-log-PI.txt",
+      "bytes": 2305,
+      "data_rows": 6,
+      "sha256": "1668FC85643D412921B42FD7285558DD7FCA43DFFEF25DAA711BD685761E7359"
+    }
+  ],
+  "generated_csvs": [
+    {
+      "path": "Completed/all_robots_all_algorithms.csv",
+      "bytes": 63518,
+      "sha256": "DBFD47923E261A02EB87DBA9838B803E1DE431AD137A64687F10C956D0DC2B2F"
+    },
+    {
+      "path": "Completed/by_algorithm/ACBBA.csv",
+      "bytes": 12549,
+      "sha256": "022FFF49312699715D4E14391CC84AFEF910AFC5A4AA7A4834B54733ED535FB7"
+    },
+    {
+      "path": "Completed/by_algorithm/CBAA.csv",
+      "bytes": 13903,
+      "sha256": "60B1D10B09777BAE3C996CBB663CAE4937B638EB033847C2FE45EBB26279CD13"
+    },
+    {
+      "path": "Completed/by_algorithm/DGA.csv",
+      "bytes": 769,
+      "sha256": "0F0AF98AE232A06E6543856CE4FDCE6839328704D30B75DCF2D7F43979DD5AAE"
+    },
+    {
+      "path": "Completed/by_algorithm/DMCHBA.csv",
+      "bytes": 11927,
+      "sha256": "900FA4C7D5C0BD7FC9ABFB2D671F34ACE4B52BA7381E90B00C4330168DF50150"
+    },
+    {
+      "path": "Completed/by_algorithm/HIPC.csv",
+      "bytes": 15488,
+      "sha256": "54B39A97E7AE48D00FE45C3AF8D48852EC421E3FBEF463D751842858096E3E45"
+    },
+    {
+      "path": "Completed/by_algorithm/PI.csv",
+      "bytes": 12727,
+      "sha256": "31C0AD4B7BCEE411E89C5F6998479F416FCA2252EA698AE0169826F660298FED"
+    },
+    {
+      "path": "Completed/coverage.csv",
+      "bytes": 597,
+      "sha256": "24FCDF7CA2AF3A8DE9050FBA12ACF5316F021BB3F5E901015604E0F90B34B900"
+    }
+  ]
+}

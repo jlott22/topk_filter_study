@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "analysis_design": "unpaired four-robot system-trial comparison at matched algorithm and Top-K condition",
+  "seed": 20260802,
+  "bootstrap_resamples": 50000,
+  "stratified_permutation_resamples": 200000,
+  "exact_permutations_per_test": 142506,
+  "multiple_testing": "Benjamini-Hochberg across 15 algorithm-by-metric exact log-mean permutation tests",
+  "inputs": [
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/combined_metrics_per_trial.csv",
+      "bytes": 14444,
+      "sha256": "DF8A9FA1E1F73BF531BA4F7DF433F7CF8795CC9CB0FAF1538030381B4A5BCC9C"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/CombinedTrials/matched_robot_rows.csv",
+      "bytes": 54501,
+      "sha256": "CC9AF89163E3E87973D16C41DD559F6231D45D5CCB1F4A465A0B8D8E87A0A9A4"
+    },
+    {
+      "path": "Results/HIL/Bayesian/CompletedTopKCampaignV8/bayesian_hil_topk_non_k1_combined_trial_level_system_and_timing_results.csv",
+      "bytes": 1043956,
+      "sha256": "F6AD64FCFC90F40119CE512B25AE74E12F84054FF5EE4B101EABF6CDBEA598B5"
+    },
+    {
+      "path": "Results/HIL/Bayesian/CompletedTopKCampaignV8/bayesian_hil_topk_non_k1_robot_trial_timing_and_allocator_metrics.csv",
+      "bytes": 3697239,
+      "sha256": "C7EBB0A72EA98B6F7A3A9FEDDE8D80B65AE78EEEAA1AA9ACEAFEE4DA68CF817D"
+    },
+    {
+      "path": "Simulation/Architecture/simulator/scenarios/final_trial_500.csv",
+      "bytes": 14999,
+      "sha256": "9139F6A4FA259016F0E650489D605333758491B62151A742E406CC17DD5DF085"
+    }
+  ],
+  "coverage": {
+    "physical_trials": 25,
+    "hil_trials": 125,
+    "algorithms": [
+      "ACBBA",
+      "CBAA",
+      "DMCHBA",
+      "HIPC",
+      "PI"
+    ],
+    "tests": 15,
+    "bh_significant_tests": 5,
+    "overall_stratified_tests": 3,
+    "overall_bh_significant_tests": 3,
+    "exact_scenario_overlaps": 0,
+    "exact_content_scenario_overlaps": 0,
+    "target_only_scenario_pairs": 2
+  },
+  "runtime": {
+    "python": "3.13.14",
+    "numpy": "2.3.3"
+  },
+  "outputs": [
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/trial_level_timing_comparison.csv",
+      "bytes": 27379,
+      "sha256": "E4AC98FDED711EB1E55A2FD8FA60CB1172AD5142FE86D5512E74EBC0FC5850C2"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/statistical_tests_by_algorithm.csv",
+      "bytes": 8803,
+      "sha256": "74B734BD55241F87C9FC07852A042120A041B268F6AC9C31150E97AD2135C5E3"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/statistical_tests_overall_stratified.csv",
+      "bytes": 1248,
+      "sha256": "2CEECE9B3E3F4B1FE4A77AFFEF2F9BC76F7252008ADDED4765DCCB804A043B12"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/metric_overview.csv",
+      "bytes": 765,
+      "sha256": "B26ADFE4EBF554BA1EA3A756745901E63830B1F0789B479A7E78CD71A85022C2"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/matching_audit.csv",
+      "bytes": 1220,
+      "sha256": "A9322190D30AC8F583E7089C41A193ED9B7D67030185A4E5CBC665435320E419"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/call_mix_audit.csv",
+      "bytes": 1153,
+      "sha256": "3B2DBD23EDE12762BE48ADE2A06FB0A3FE5A9912A60A6FED1F9DEA3548D9B6C8"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/scenario_content_overlap_audit.csv",
+      "bytes": 497,
+      "sha256": "9462360DE1397DF451E11EB1F5B7A41991EFF7AE2BD73D531745907A75546B1C"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/target_only_performance_timing_comparison.csv",
+      "bytes": 4282,
+      "sha256": "94E1BA2503AB37323312013C8219799C47897766055A48921EFCE968AD7ABEF2"
+    },
+    {
+      "path": "Results/Hardware/PhysicalTrials/HILComparison/README.md",
+      "bytes": 3135,
+      "sha256": "083D1C9387C821DF2926488C7E16641002540513AA2FC9ED27AB9FE3892792BC"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+algorithm,environment,trial_count,allocator_calls,candidate_filter_invocations,filter_invocations_per_allocator_call,mean_reported_solve_gap_us,filter_mean_denominator,combined_mean_denominator
+ACBBA,physical,5,80,80,1.0,19435.662769177845,candidate_filter_invocations,timed_allocator_calls
+ACBBA,HIL,25,3816,1975,0.5175576519916143,,candidate_filter_invocations,timed_allocator_calls
+CBAA,physical,5,60,60,1.0,204964.03183982684,candidate_filter_invocations,timed_allocator_calls
+CBAA,HIL,25,3466,1623,0.4682631275245239,,candidate_filter_invocations,timed_allocator_calls
+DMCHBA,physical,5,44,32,0.7272727272727273,1641.0135531135531,candidate_filter_invocations,timed_allocator_calls
+DMCHBA,HIL,25,3387,621,0.183348095659876,,candidate_filter_invocations,timed_allocator_calls
+HIPC,physical,5,35,35,1.0,8496.446666666667,candidate_filter_invocations,timed_allocator_calls
+HIPC,HIL,25,3737,1896,0.5073588439925074,,candidate_filter_invocations,timed_allocator_calls
+PI,physical,5,59,59,1.0,323750.1861904762,candidate_filter_invocations,timed_allocator_calls
+PI,HIL,25,3555,1714,0.48213783403656824,,candidate_filter_invocations,timed_allocator_calls
