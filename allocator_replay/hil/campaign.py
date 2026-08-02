@@ -32,6 +32,11 @@ from allocator_replay.hil.manifest import (
     save_schedule,
 )
 from allocator_replay.hil.memory import require_safe_commit
+from allocator_replay.hil.watchdog import (
+    AdaptiveWatchdogPolicy,
+    HilTrialFailure,
+    TrialWatchdog,
+)
 from allocator_replay.host.transport import ReplayTransportError
 
 
@@ -93,6 +98,7 @@ def _run_trial(
     trial_id: int,
     generation: int,
     device: Any,
+    watchdog_policy: AdaptiveWatchdogPolicy | None = None,
 ) -> dict[str, Any]:
     require_safe_commit()
     condition = _condition(job)
@@ -114,13 +120,72 @@ def _run_trial(
         else COLLABORATIVE_RUN_SEED + trial_id * 1009
     )
     started = time.time()
+    policy = watchdog_policy or AdaptiveWatchdogPolicy()
+
+    def record_adjustment(adjustment: dict[str, Any]) -> None:
+        journal.append(
+            {
+                "schema": 1,
+                "record_type": "watchdog_threshold_adjustment",
+                "campaign_mode": "pololu_authoritative_hil",
+                "condition_id": condition.condition_id,
+                "mission": condition.mission,
+                "algorithm": condition.algorithm,
+                "top_k_level": condition.top_k_level,
+                "trial_id": trial_id,
+                "run_generation": generation,
+                "device_id": identity.device_id,
+                **adjustment,
+                "journaled_at": time.time(),
+            }
+        )
+
+    watchdog = TrialWatchdog(
+        condition.mission,
+        policy,
+        on_adjustment=record_adjustment,
+    )
     try:
-        state = runner_class(
-            cfg=cfg,
-            allocator_cls=proxy,
-            comm_model=comm,
-            seed=seed,
-        ).run_trial(scenario)
+        cfg.debug_max_events = policy.event_cap
+        if hasattr(cfg, "debug_max_stagnant_events"):
+            cfg.debug_max_stagnant_events = policy.event_cap
+        try:
+            state = runner_class(
+                cfg=cfg,
+                allocator_cls=proxy,
+                comm_model=comm,
+                seed=seed,
+            ).run_trial(scenario, on_step=watchdog)
+        except HilTrialFailure as exc:
+            journal.append(
+                {
+                    "schema": 1,
+                    "record_type": "trial_failed",
+                    "campaign_mode": "pololu_authoritative_hil",
+                    "condition_id": condition.condition_id,
+                    "mission": condition.mission,
+                    "algorithm": condition.algorithm,
+                    "top_k_level": condition.top_k_level,
+                    "top_k_rate": condition.top_k_rate,
+                    "top_k_cells": condition.top_k_cells,
+                    "trial_id": trial_id,
+                    "run_generation": generation,
+                    "device_id": identity.device_id,
+                    "build_id": identity.build_id,
+                    "frequency_hz": identity.frequency_hz,
+                    "scenario_file": str(scenario_path.resolve()),
+                    "trial_status": "failed",
+                    "failure_reason": exc.reason,
+                    "events_processed": int(
+                        exc.diagnostics.get("events_processed", 0)
+                    ),
+                    "allocator_call_count": bridge.accepted_call_count,
+                    "wall_seconds": time.time() - started,
+                    "watchdog_diagnostics": exc.diagnostics,
+                    "journaled_at": time.time(),
+                }
+            )
+            raise
     finally:
         try:
             bridge.close()
@@ -179,6 +244,29 @@ def _weight(job: dict[str, Any]) -> float:
     return mission * factors[job["algorithm"]] * max(1, int(job["top_k_cells"])) ** 2
 
 
+TERMINAL_JOB_STATUSES = {
+    "complete",
+    "completed_with_trial_failures",
+    "stopped",
+    "excluded",
+}
+
+
+def _failed_trial_ids(job: dict[str, Any]) -> set[int]:
+    result: set[int] = set()
+    for item in job.get("failed_trials", []):
+        result.add(int(item["trial_id"] if isinstance(item, dict) else item))
+    return result
+
+
+def _trial_weight(job: dict[str, Any], trial_id: int) -> float:
+    estimates = job.get("trial_work_estimates", {})
+    value = estimates.get(str(trial_id)) if isinstance(estimates, dict) else None
+    if value is not None:
+        return float(value)
+    return _weight(job)
+
+
 class HilCampaignRunner:
     def __init__(self, root: Path, devices: list[Any]) -> None:
         self.root = root.resolve()
@@ -188,48 +276,167 @@ class HilCampaignRunner:
         self.manifest = load_manifest(self.root, "manifest.json")
         self.schedule["status"] = "running"
         self.schedule.setdefault("devices", {})
+        # A process restart invalidates all in-memory trial leases.  Incomplete
+        # generations remain in journals and are restarted with a new generation.
+        self.schedule["active_trials"] = {}
+        self.policies: dict[str, AdaptiveWatchdogPolicy] = {}
         for job in self.schedule["jobs"]:
             if job["status"] == "running":
                 job["status"] = "pending"
+            self.policies[job["condition_id"]] = AdaptiveWatchdogPolicy()
         save_schedule(self.root, self.schedule)
 
-    def _claim(self, device_id: str) -> dict[str, Any] | None:
+    def _release_collaborative_if_ready(self) -> None:
+        bayesian_ready = all(
+            job["status"] in TERMINAL_JOB_STATUSES
+            for job in self.schedule["jobs"]
+            if job["mission"] == "bayesian"
+        )
+        if not bayesian_ready:
+            return
+        changed = False
+        for job in self.schedule["jobs"]:
+            if (
+                job["mission"] == "collaborative"
+                and job.get("device_id") == "__after_bayesian_hold__"
+            ):
+                job["device_id"] = ""
+                changed = True
+        if changed:
+            self.schedule["phase"] = "collaborative"
+
+    def _active_for_condition(self, condition_id: str) -> int:
+        return sum(
+            assignment.get("condition_id") == condition_id
+            for assignment in self.schedule.get("active_trials", {}).values()
+        )
+
+    def _claim(self, device_id: str) -> tuple[dict[str, Any], int, int] | None:
         with self.lock:
-            eligible = [
-                job
-                for job in self.schedule["jobs"]
-                if job["status"] == "pending"
-                and (not job.get("device_id") or job["device_id"] == device_id)
-            ]
-            if not eligible:
+            self._release_collaborative_if_ready()
+            active = self.schedule.setdefault("active_trials", {})
+            candidates: list[tuple[dict[str, Any], int]] = []
+            for job in self.schedule["jobs"]:
+                if job["status"] not in {"pending", "running"}:
+                    continue
+                pin = str(job.get("device_id") or "")
+                if pin and pin != device_id:
+                    continue
+                completed = {int(item) for item in job["completed_trials"]}
+                failed = _failed_trial_ids(job)
+                for trial_value in job["trial_ids"]:
+                    trial_id = int(trial_value)
+                    key = f"{job['condition_id']}:{trial_id}"
+                    if trial_id not in completed | failed and key not in active:
+                        candidates.append((job, trial_id))
+            if not candidates:
                 return None
-            job = max(eligible, key=_weight)
+
+            bayesian = [item for item in candidates if item[0]["mission"] == "bayesian"]
+            if bayesian:
+                highest_cells = max(int(item[0]["top_k_cells"]) for item in bayesian)
+                highest = [
+                    item for item in bayesian
+                    if int(item[0]["top_k_cells"]) == highest_cells
+                ]
+                if not any(
+                    self._active_for_condition(item[0]["condition_id"])
+                    for item in highest
+                ):
+                    candidates = highest
+
+            job, trial_id = max(
+                candidates,
+                key=lambda item: (
+                    _trial_weight(item[0], item[1]),
+                    int(item[0]["top_k_cells"]),
+                    item[0]["condition_id"],
+                    -item[1],
+                ),
+            )
             job["status"] = "running"
-            job["device_id"] = device_id
+            generations = job.setdefault("trial_generations", {})
+            generation = int(generations.get(str(trial_id), 0)) + 1
+            generations[str(trial_id)] = generation
+            devices = job.setdefault("device_ids", [])
+            if device_id not in devices:
+                devices.append(device_id)
+            key = f"{job['condition_id']}:{trial_id}"
+            active[key] = {
+                "condition_id": job["condition_id"],
+                "trial_id": trial_id,
+                "run_generation": generation,
+                "device_id": device_id,
+                "claimed_at": datetime.now(timezone.utc).isoformat(),
+                "predicted_work": _trial_weight(job, trial_id),
+            }
             self.schedule["devices"][device_id] = {
                 "status": "running",
                 "condition_id": job["condition_id"],
+                "trial_id": trial_id,
+                "run_generation": generation,
                 "last_seen_at": datetime.now(timezone.utc).isoformat(),
             }
             save_schedule(self.root, self.schedule)
-            return job
+            return job, trial_id, generation
+
+    def _release_assignment(self, job: dict[str, Any], trial_id: int) -> None:
+        key = f"{job['condition_id']}:{trial_id}"
+        self.schedule.setdefault("active_trials", {}).pop(key, None)
+
+    def _refresh_job_status(self, job: dict[str, Any]) -> None:
+        if job["status"] in {"stopped", "excluded"}:
+            return
+        completed = {int(item) for item in job["completed_trials"]}
+        failed = _failed_trial_ids(job)
+        planned = {int(item) for item in job["trial_ids"]}
+        if planned <= completed | failed:
+            job["status"] = (
+                "completed_with_trial_failures" if failed else "complete"
+            )
+            return
+        job["status"] = (
+            "running"
+            if self._active_for_condition(job["condition_id"])
+            else "pending"
+        )
 
     def _save_trial(self, job: dict[str, Any], trial_id: int) -> None:
         with self.lock:
+            self._release_assignment(job, trial_id)
             completed = set(int(item) for item in job["completed_trials"])
             completed.add(trial_id)
             job["completed_trials"] = sorted(completed)
+            self._refresh_job_status(job)
+            save_schedule(self.root, self.schedule)
+
+    def _fail_trial(
+        self,
+        job: dict[str, Any],
+        trial_id: int,
+        generation: int,
+        device_id: str,
+        reason: str,
+    ) -> None:
+        with self.lock:
+            self._release_assignment(job, trial_id)
+            failures = job.setdefault("failed_trials", [])
+            if not any(int(item["trial_id"]) == trial_id for item in failures):
+                failures.append(
+                    {
+                        "trial_id": trial_id,
+                        "run_generation": generation,
+                        "device_id": device_id,
+                        "reason": reason,
+                    }
+                )
+            self._refresh_job_status(job)
             save_schedule(self.root, self.schedule)
 
     def _stop(self, job: dict[str, Any], reason: str) -> None:
         with self.lock:
             job["status"] = "stopped"
             job["stopped_reason"] = reason
-            save_schedule(self.root, self.schedule)
-
-    def _complete(self, job: dict[str, Any]) -> None:
-        with self.lock:
-            job["status"] = "complete"
             save_schedule(self.root, self.schedule)
 
     def _worker(self, device: Any) -> None:
@@ -268,40 +475,56 @@ class HilCampaignRunner:
                         )["status"] = "disconnected"
                         save_schedule(self.root, self.schedule)
                     return
-            job = self._claim(identity.device_id)
-            if job is None:
-                break
-            restart_before_claim = True
-            generations = job.setdefault("trial_generations", {})
-            try:
-                for trial_id in job["trial_ids"]:
-                    trial_id = int(trial_id)
-                    if trial_id in {int(item) for item in job["completed_trials"]}:
-                        continue
-                    require_safe_commit()
-                    generation = int(generations.get(str(trial_id), 0)) + 1
-                    generations[str(trial_id)] = generation
-                    with self.lock:
-                        save_schedule(self.root, self.schedule)
-                    _run_trial(
-                        self.root,
-                        self.manifest,
-                        job,
-                        trial_id,
-                        generation,
-                        device,
+            claim = self._claim(identity.device_id)
+            if claim is None:
+                # Other workers may currently own every available trial.  Stay
+                # available until those trials finish because their completion
+                # can expose more work (most importantly, releasing the held
+                # collaborative phase after the final Bayesian trial).
+                with self.lock:
+                    work_in_flight = bool(
+                        self.schedule.get("active_trials", {})
                     )
-                    self._save_trial(job, trial_id)
-                self._complete(job)
+                if work_in_flight:
+                    time.sleep(0.05)
+                    continue
+                break
+            job, trial_id, generation = claim
+            restart_before_claim = True
+            try:
+                require_safe_commit()
+                _run_trial(
+                    self.root,
+                    self.manifest,
+                    job,
+                    trial_id,
+                    generation,
+                    device,
+                    self.policies[job["condition_id"]],
+                )
+                self._save_trial(job, trial_id)
+            except HilTrialFailure as exc:
+                self._fail_trial(
+                    job,
+                    trial_id,
+                    generation,
+                    identity.device_id,
+                    exc.reason,
+                )
             except HilConditionStop as exc:
+                with self.lock:
+                    self._release_assignment(job, trial_id)
                 self._stop(job, exc.reason)
             except ReplayTransportError:
                 with self.lock:
+                    self._release_assignment(job, trial_id)
                     job["status"] = "pending"
                     self.schedule["devices"][identity.device_id]["status"] = "disconnected"
                     save_schedule(self.root, self.schedule)
                 return
             except Exception as exc:
+                with self.lock:
+                    self._release_assignment(job, trial_id)
                 journal = JsonlJournal(
                     self.root / "journals" / f"{identity.device_id}.jsonl"
                 )
@@ -324,7 +547,7 @@ class HilCampaignRunner:
                 future.result()
         with self.lock:
             statuses = {job["status"] for job in self.schedule["jobs"]}
-            if statuses <= {"complete", "stopped"}:
+            if statuses <= TERMINAL_JOB_STATUSES:
                 self.schedule["status"] = "complete"
             elif "running" not in statuses:
                 self.schedule["status"] = "paused"

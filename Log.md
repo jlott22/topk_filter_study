@@ -2652,3 +2652,105 @@ cells are shared across a local team plan, not reserved per robot. K=11 already
 returns to the higher-Top-K failure behavior (0/3000), and collaborative K=1/K=2
 produced no failures because those known-target simulations do not have the same
 post-clue posterior-collapse mechanism.
+
+## 2026-08-01 - Bayesian K=1 exclusion and time-conscious HIL watchdog cutover
+
+The five-board `pololu_native_persistent_v8` runner was stopped at 22:20 local
+time and its schedule was saved as
+`schedule.before_watchdog_cutover.20260801T222023.json`. The source journals
+were not modified. At cutover the core campaign contained 29 completed
+Bayesian conditions, 17 conditions stopped by the established 30-second
+allocator-call rule, and two unfinished conditions: PI 3% with 21 trials left
+and HIPC 1% with 23 trials left.
+
+All six Bayesian K=1 conditions were removed from the core study. Their seven
+completed trials and all partial/call records were extracted to
+`archive/bayesian_k1_removed_20260801/`. The archive contains 26,303 records,
+the pre-cutover schedule and manifest, SHA-256 hashes, and a README. The
+original append-only journals remain the source evidence. Core and combined
+HIL reports now exclude these conditions. Future HIL manifests also omit
+Bayesian K=1; collaborative K=1 and K=2 remain in scope.
+
+The remaining conditions now use whole-trial sharding. A trial stays on one
+Pololu for its entire generation, but different trials from one condition may
+run on different boards. Every call and trial retains its device ID, and mixed
+device conditions are identified in reports. Desktop allocator-call counts are
+used as longest-processing-time estimates. PI 3% receives the first board and
+keeps at least one worker while the other boards process the heavier HIPC 1%
+queue. Collaborative work remains held until Bayesian work is terminal, then
+all five boards are released to it.
+
+The host-only watchdog does not change or time the allocator. It observes the
+simulator after each event and starts confirmation after 128 events without
+team movement, 1,024 events without mission progress, or eight repeats of the
+same compact team state in a 128-event window. Confirmation is 64 events for
+movement/repeated-state warnings and 128 events for mission-progress warnings.
+If progress resumes, only the triggering threshold rises to 125% of the
+observed streak and the adjustment is journaled. Otherwise the trial is marked
+failed and the condition continues. The absolute event cap is exactly 8,000
+with no grace. Failure labels are `deadlock_no_movement`,
+`deadlock_no_mission_progress`, `deadlock_repeated_state`, and
+`event_cap_8000`. Calls from failed generations remain raw evidence but are not
+accepted in core timing summaries.
+
+The device allocator modules and both benchmark simulator repositories were
+not edited. The Pololu replay build remains
+`micropython_1_24_o0_2539f0c4fe4d`. All five boards were recovered after the
+interrupted runner, identified as MicroPython 1.24.0 at 125 MHz, and mapped as
+COM3=`e4621cb30b0b342f`, COM11=`e4621cb30b4b372f`,
+COM12=`e4621cb30b2b352f`, COM13=`e4621cb30b43372f`, and
+COM14=`e4621cb30b16392f`. The host implementation provenance is segmented at
+the cutover so pre-cutover rows retain their earlier source hash and new rows
+receive the watchdog/sharding source hash.
+
+The full one-repetition preflight command was stopped after it exceeded eight
+minutes because it redundantly traversed every allocator/mission combination.
+The passed 2026-07-29 five-device preflight was instead revalidated against all
+currently connected identities, build IDs, firmware hashes, and frequencies.
+Each board then successfully entered a clean replay worker, returned its
+identity, exited safely, and was rediscovered with no failures.
+
+The sharded watchdog runner started at 22:55 local time as PID 30724. Its first
+lease went to the higher-priority PI 3% condition (trial 388 on COM11), while
+the other four boards received the predicted-longest HIPC 1% trials 94, 164,
+166, and 50. New generation-1 call records appeared in all five journals and
+the runner stderr remained empty. The previously interrupted PI trial 50 and
+HIPC trial 32 remain eligible and will restart with generation 2 when their
+longest-processing-time turns are reached.
+
+## 2026-08-02 - Bayesian HIL completion, collaborative pause, and final export
+
+The five-board sharded run finished all remaining Bayesian work. Bayesian is
+terminal across its 48 retained non-K=1 conditions: 29 conditions are complete,
+17 were stopped by the established 30-second allocator-call rule, and PI 3%
+and HIPC 1% finished as `completed_with_trial_failures`. PI 3% completed 24 of
+25 trials and trial 50 ended as `deadlock_repeated_state`; HIPC 1% completed 24
+of 25 and trial 32 ended with the same watchdog classification. ACBBA 5%
+retains its earlier trial-50 `hardware_state_setup_failure` and 24 completed
+trials. These three conditions are explicitly nonrepresentative. The 17 stopped
+conditions and their partial completed trials are also retained for audit but
+are not represented as complete-condition aggregates.
+
+Collaborative execution was stopped and the schedule was saved in a paused
+state. One collaborative trial completed immediately before the stop; no
+Bayesian trial was interrupted or lost. The overall paused schedule contains
+984 completed trials and six watchdog/host trial failures across both missions.
+All boards are idle and may be disconnected; resuming collaborative work is a
+separate future action.
+
+A compact, Bayesian-only final bundle was written under
+`results/allocator_replay/hil_campaigns/pololu_native_persistent_v8/reports/bayesian_final/`.
+It contains 48 condition rows, 793 completed system-trial rows, 3,172 robot-trial
+rows (exactly four per system trial), 123,239 accepted allocator calls, three
+failed-trial rows, and one Bayesian watchdog-threshold adjustment. Bayesian
+K=1 is absent. Twenty-eight fully completed, failure-free conditions are marked
+representative. The audit verified unique system-trial keys, exact robot-to-
+system call and timing totals, `allocator = filter + allocator-exclusive` for
+every robot row, representative condition aggregation, and SHA-256 hashes for
+all five CSV files.
+
+The phase-transition scheduler was also corrected so workers that temporarily
+have no claimable trial remain available while another worker finishes the last
+Bayesian trial. This prevents four boards from exiting before the held
+collaborative queue is released. It does not resume or contact any board while
+the campaign is paused. The full desktop suite passes 111 tests.

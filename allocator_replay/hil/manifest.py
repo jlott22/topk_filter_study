@@ -339,6 +339,11 @@ def prepare_campaign(
     }
     jobs: list[dict[str, Any]] = []
     for condition in conditions():
+        # Bayesian K=1 is intentionally excluded from authoritative HIL.  Its
+        # starvation-heavy paths are retained in the archived 2026-08-01 run,
+        # while collaborative K=1 and K=2 remain in scope.
+        if condition.mission == "bayesian" and condition.top_k_cells == 1:
+            continue
         trial_ids = selected[condition.mission]
         historical_system_csv = _baseline_path(condition)
         scenario_sha = (
@@ -575,7 +580,9 @@ def verify_campaign_provenance(
 
 
 def load_manifest(root: Path, name: str = "schedule.json") -> dict[str, Any]:
-    return json.loads((root / name).read_text(encoding="utf-8"))
+    # PowerShell's UTF-8 writer may add a BOM to an operational schedule.
+    # Accept it without weakening JSON validation or changing manifest content.
+    return json.loads((root / name).read_text(encoding="utf-8-sig"))
 
 
 def save_schedule(root: Path, value: dict[str, Any]) -> None:

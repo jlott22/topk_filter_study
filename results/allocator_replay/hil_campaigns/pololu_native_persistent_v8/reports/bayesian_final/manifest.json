@@ -1,0 +1,50 @@
+{
+    "schema":  1,
+    "campaign_id":  "pololu_native_persistent_v8",
+    "mission":  "bayesian",
+    "created_at":  "2026-08-02T16:05:58.7139019Z",
+    "campaign_manifest_sha256":  "e777f7ae8944d7a130951714be14106d5782ffa9cff0129d3091bb3c8ec67166",
+    "device_build_id":  "micropython_1_24_o0_2539f0c4fe4d",
+    "condition_count":  48,
+    "system_trial_count":  793,
+    "robot_trial_count":  3172,
+    "failed_trial_count":  3,
+    "watchdog_adjustment_count":  1,
+    "excluded_bayesian_k1":  true,
+    "expected_robots_per_trial":  4,
+    "verification":  {
+                         "no_k1_rows":  true,
+                         "unique_system_trial_keys":  true,
+                         "four_robot_rows_per_system_trial":  true,
+                         "robot_to_system_call_time_totals_match":  true,
+                         "allocator_equals_filter_plus_exclusive":  true,
+                         "system_to_representative_condition_totals_match":  true
+                     },
+    "files":  [
+                  {
+                      "name":  "condition_metrics.csv",
+                      "bytes":  54856,
+                      "sha256":  "652e45af0398630482bd840650e54e25db93d2b696b7281d6fa554a4ad23b3ac"
+                  },
+                  {
+                      "name":  "robot_trial_metrics.csv",
+                      "bytes":  3697239,
+                      "sha256":  "c7ebb0a72ea98b6f7a3a9fedde8d80b65ae78eeeaa1aa9aceafee4da68cf817d"
+                  },
+                  {
+                      "name":  "system_trial_metrics.csv",
+                      "bytes":  1043956,
+                      "sha256":  "f6ad64fcfc90f40119ce512b25ae74e12f84054ff5ee4b101eabf6cdbea598b5"
+                  },
+                  {
+                      "name":  "trial_failures.csv",
+                      "bytes":  4936,
+                      "sha256":  "70c955a512cf81ca4d6be9db36bc631ed757930626b6feb29d8c0b31fbe197ab"
+                  },
+                  {
+                      "name":  "watchdog_threshold_adjustments.csv",
+                      "bytes":  1509,
+                      "sha256":  "01a812037c72b6efa1389323c06cf812df57eb3b53dcdbefe1adf462a24a838e"
+                  }
+              ]
+}

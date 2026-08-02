@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from allocator_replay.hil.manifest import (
     verify_campaign_provenance,
 )
 from allocator_replay.hil.report import rebuild_hil_reports
+from allocator_replay.hil.watchdog import HilTrialFailure
 from allocator_replay.host.emulator import LoopbackReplayDevice
 
 
@@ -132,8 +134,8 @@ class HilManifestAndReportTests(unittest.TestCase):
                         device_build_ids=["wrong-build"],
                     )
         self.assertEqual(first_value["selected_trials"], second_value["selected_trials"])
-        self.assertEqual(first_value["condition_count"], 102)
-        self.assertEqual(first_value["mission_run_count"], 1830)
+        self.assertEqual(first_value["condition_count"], 96)
+        self.assertEqual(first_value["mission_run_count"], 1680)
         self.assertEqual(len(first_value["selected_trials"]["bayesian"]), 25)
         self.assertEqual(len(first_value["selected_trials"]["collaborative"]), 10)
         self.assertEqual(first_value["schema"], 2)
@@ -299,6 +301,79 @@ class HilManifestAndReportTests(unittest.TestCase):
             )
             self.assertEqual(system[0]["scenario_sha256"], "hash")
 
+    def test_report_omits_excluded_condition_from_all_core_csvs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "journals").mkdir()
+            jobs = []
+            records = []
+            for condition_id, excluded in (
+                ("bayesian_cbaa_topk_fixed_k1", True),
+                ("bayesian_cbaa_topk_003_k11", False),
+            ):
+                jobs.append({
+                    "condition_id": condition_id,
+                    "mission": "bayesian",
+                    "algorithm": "CBAA",
+                    "top_k_level": "K=1" if excluded else "3%",
+                    "top_k_rate": 1 / 361 if excluded else 0.03,
+                    "top_k_cells": 1 if excluded else 11,
+                    "status": "excluded" if excluded else "complete",
+                    "excluded_from_core": excluded,
+                    "trial_ids": [1],
+                    "completed_trials": [1],
+                    "stopped_reason": "",
+                })
+                records.extend([
+                    {
+                        "record_type": "call_attempt",
+                        "condition_id": condition_id,
+                        "mission": "bayesian",
+                        "algorithm": "CBAA",
+                        "top_k_level": "K=1" if excluded else "3%",
+                        "top_k_rate": 1 / 361 if excluded else 0.03,
+                        "top_k_cells": 1 if excluded else 11,
+                        "trial_id": 1,
+                        "run_generation": 1,
+                        "robot_id": "00",
+                        "fixture_id": condition_id,
+                        "accepted": True,
+                        "allocator_time_us": 10,
+                        "candidate_filter_time_us": 2,
+                        "allocator_exclusive_time_us": 8,
+                        "candidate_filter_calls": 1,
+                        "device_id": "dev",
+                    },
+                    {
+                        "record_type": "trial_complete",
+                        "condition_id": condition_id,
+                        "trial_id": 1,
+                        "run_generation": 1,
+                        "scenario_file": "scenario.csv",
+                        "scenario_sha256": "hash",
+                        "trial_status": "completed",
+                        "total_team_steps": 4,
+                        "max_steps_any_robot": 1,
+                        "events_processed": 4,
+                    },
+                ])
+            schedule = {"campaign_id": "excluded", "jobs": jobs}
+            for name in ("manifest.json", "schedule.json"):
+                (root / name).write_text(json.dumps(schedule), encoding="utf-8")
+            (root / "journals" / "dev.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in records),
+                encoding="utf-8",
+            )
+            summary = rebuild_hil_reports(root)
+            self.assertEqual(summary["excluded_conditions"], 1)
+            self.assertEqual(summary["condition_rows"], 1)
+            with (root / "reports" / "raw_call_attempts.csv").open(
+                encoding="utf-8"
+            ) as handle:
+                raw = list(__import__("csv").DictReader(handle))
+            self.assertEqual(len(raw), 1)
+            self.assertEqual(raw[0]["condition_id"], "bayesian_cbaa_topk_003_k11")
+
     def test_invalidation_preserves_raw_attempts_but_rejects_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -424,7 +499,7 @@ class HilManifestAndReportTests(unittest.TestCase):
         self.assertEqual(decision.goal, (3, 4))
 
     def test_scheduler_supports_one_two_and_three_devices(self) -> None:
-        for worker_count in (1, 2, 3):
+        for worker_count in (1, 2, 3, 5):
             with self.subTest(worker_count=worker_count):
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
@@ -463,7 +538,15 @@ class HilManifestAndReportTests(unittest.TestCase):
                         for index in range(worker_count)
                     ]
 
-                    def complete(root, manifest, job, trial_id, generation, device):
+                    def complete(
+                        root,
+                        manifest,
+                        job,
+                        trial_id,
+                        generation,
+                        device,
+                        watchdog_policy=None,
+                    ):
                         return {"trial_id": trial_id}
 
                     with patch(
@@ -475,6 +558,186 @@ class HilManifestAndReportTests(unittest.TestCase):
                     self.assertTrue(
                         all(job["status"] == "complete" for job in result["jobs"])
                     )
+
+    def test_scheduler_shards_whole_trials_across_five_devices(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "journals").mkdir()
+            job = {
+                "condition_id": "bayesian_pi_topk_003_k11",
+                "mission": "bayesian",
+                "algorithm": "PI",
+                "top_k_level": "3%",
+                "top_k_rate": 0.03,
+                "top_k_cells": 11,
+                "trial_ids": list(range(15)),
+                "completed_trials": [],
+                "trial_work_estimates": {
+                    str(index): 100 - index for index in range(15)
+                },
+                "status": "pending",
+                "device_id": "",
+                "stopped_reason": "",
+            }
+            schedule = {
+                "campaign_id": "five-worker-sharding",
+                "status": "pending",
+                "jobs": [job],
+            }
+            for name in ("manifest.json", "schedule.json"):
+                (root / name).write_text(json.dumps(schedule), encoding="utf-8")
+            devices = [
+                SimpleNamespace(
+                    identity=SimpleNamespace(device_id=f"device-{index}")
+                )
+                for index in range(5)
+            ]
+            assignments = []
+
+            def complete(
+                root,
+                manifest,
+                job,
+                trial_id,
+                generation,
+                device,
+                watchdog_policy=None,
+            ):
+                assignments.append((trial_id, device.identity.device_id))
+                time.sleep(0.01)
+                return {"trial_id": trial_id}
+
+            with patch(
+                "allocator_replay.hil.campaign._run_trial",
+                side_effect=complete,
+            ):
+                result = HilCampaignRunner(root, devices).run()
+            self.assertEqual(result["jobs"][0]["status"], "complete")
+            self.assertEqual({trial for trial, _ in assignments}, set(range(15)))
+            self.assertGreaterEqual(len({device for _, device in assignments}), 4)
+
+    def test_idle_workers_wait_for_bayesian_to_release_collaborative(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "journals").mkdir()
+            schedule = {
+                "campaign_id": "phase-release-workers",
+                "status": "pending",
+                "phase": "bayesian",
+                "jobs": [
+                    {
+                        "condition_id": "bayesian_pi_topk_003_k11",
+                        "mission": "bayesian",
+                        "algorithm": "PI",
+                        "top_k_level": "3%",
+                        "top_k_rate": 0.03,
+                        "top_k_cells": 11,
+                        "trial_ids": [1],
+                        "completed_trials": [],
+                        "status": "pending",
+                        "device_id": "",
+                        "stopped_reason": "",
+                    },
+                    {
+                        "condition_id": "collaborative_cbaa_topk_005_k18",
+                        "mission": "collaborative",
+                        "algorithm": "CBAA",
+                        "top_k_level": "5%",
+                        "top_k_rate": 0.05,
+                        "top_k_cells": 18,
+                        "trial_ids": list(range(8)),
+                        "completed_trials": [],
+                        "status": "pending",
+                        "device_id": "__after_bayesian_hold__",
+                        "stopped_reason": "",
+                    },
+                ],
+            }
+            for name in ("manifest.json", "schedule.json"):
+                (root / name).write_text(json.dumps(schedule), encoding="utf-8")
+            devices = [
+                SimpleNamespace(
+                    identity=SimpleNamespace(device_id=f"device-{index}")
+                )
+                for index in range(5)
+            ]
+            collaborative_devices = set()
+
+            def complete(
+                root,
+                manifest,
+                job,
+                trial_id,
+                generation,
+                device,
+                watchdog_policy=None,
+            ):
+                if job["mission"] == "bayesian":
+                    time.sleep(0.05)
+                else:
+                    collaborative_devices.add(device.identity.device_id)
+                    time.sleep(0.02)
+                return {"trial_id": trial_id}
+
+            with patch(
+                "allocator_replay.hil.campaign._run_trial",
+                side_effect=complete,
+            ):
+                result = HilCampaignRunner(root, devices).run()
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["phase"], "collaborative")
+            self.assertGreaterEqual(len(collaborative_devices), 4)
+
+    def test_watchdog_failure_continues_to_next_trial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "journals").mkdir()
+            schedule = {
+                "campaign_id": "trial-failure-continuation",
+                "status": "pending",
+                "jobs": [{
+                    "condition_id": "bayesian_pi_topk_003_k11",
+                    "mission": "bayesian",
+                    "algorithm": "PI",
+                    "top_k_level": "3%",
+                    "top_k_rate": 0.03,
+                    "top_k_cells": 11,
+                    "trial_ids": [1, 2],
+                    "completed_trials": [],
+                    "status": "pending",
+                    "device_id": "",
+                    "stopped_reason": "",
+                }],
+            }
+            for name in ("manifest.json", "schedule.json"):
+                (root / name).write_text(json.dumps(schedule), encoding="utf-8")
+            device = SimpleNamespace(
+                identity=SimpleNamespace(device_id="device-0")
+            )
+
+            def run(
+                root,
+                manifest,
+                job,
+                trial_id,
+                generation,
+                device,
+                watchdog_policy=None,
+            ):
+                if trial_id == 1:
+                    raise HilTrialFailure(
+                        "deadlock_repeated_state", {"events_processed": 72}
+                    )
+                return {"trial_id": trial_id}
+
+            with patch(
+                "allocator_replay.hil.campaign._run_trial", side_effect=run
+            ):
+                result = HilCampaignRunner(root, [device]).run()
+            job = result["jobs"][0]
+            self.assertEqual(job["completed_trials"], [2])
+            self.assertEqual(job["failed_trials"][0]["trial_id"], 1)
+            self.assertEqual(job["status"], "completed_with_trial_failures")
 
 
 if __name__ == "__main__":

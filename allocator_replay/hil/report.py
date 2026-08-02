@@ -94,11 +94,20 @@ def _provenance_fields(
     mission: str = "",
     trial_id: int | None = None,
     invalidation: dict[str, Any] | None = None,
+    journaled_at: float | None = None,
 ) -> dict[str, Any]:
     frozen_manifest_path = root / "manifest.json"
     if not frozen_manifest_path.exists():
         frozen_manifest_path = root / "schedule.json"
     implementation = manifest.get("implementation", {})
+    if journaled_at is not None:
+        for segment in manifest.get("implementation_segments", []):
+            started = float(segment.get("started_at_epoch", 0))
+            ended_value = segment.get("ended_at_epoch")
+            ended = float(ended_value) if ended_value is not None else None
+            if journaled_at >= started and (ended is None or journaled_at < ended):
+                implementation = segment.get("implementation", implementation)
+                break
     device_build = implementation.get("device_build", {})
     simulator = implementation.get("simulator_sources", {}).get(mission, {})
     scenario_sha = ""
@@ -157,6 +166,10 @@ def _enrich(
         mission=mission,
         trial_id=trial_id,
         invalidation=invalidation,
+        journaled_at=(
+            float(item["journaled_at"])
+            if item.get("journaled_at") is not None else None
+        ),
     )
     # Journaled values identify what actually ran; frozen campaign fields fill
     # metadata that was deliberately not duplicated into every JSONL record.
@@ -198,13 +211,71 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
     )
     invalidation = load_invalidation(root)
     journal = _read_journals(root)
+    excluded_condition_ids = {
+        str(job["condition_id"])
+        for job in schedule["jobs"]
+        if job.get("excluded_from_core") or job.get("status") == "excluded"
+    }
+    core_journal = [
+        row
+        for row in journal
+        if str(row.get("condition_id", "")) not in excluded_condition_ids
+    ]
     classifications = {
         (row["fixture_id"], int(row["run_generation"])): row["call_class"]
-        for row in journal
+        for row in core_journal
         if row.get("record_type") == "call_classification"
     }
     trials = [
-        row for row in journal if row.get("record_type") == "trial_complete"
+        row
+        for row in core_journal
+        if row.get("record_type") == "trial_complete"
+    ]
+    trial_failures = [
+        _enrich(root, manifest, row, invalidation)
+        for row in core_journal
+        if row.get("record_type") == "trial_failed"
+    ]
+    journaled_failure_keys = {
+        (str(row.get("condition_id", "")), int(row.get("trial_id", -1)))
+        for row in trial_failures
+    }
+    for job in schedule["jobs"]:
+        if job.get("excluded_from_core") or job.get("status") == "excluded":
+            continue
+        for failure in job.get("failed_trials", []):
+            trial_id = int(failure["trial_id"])
+            key = (str(job["condition_id"]), trial_id)
+            if key in journaled_failure_keys:
+                continue
+            trial_failures.append(
+                _enrich(
+                    root,
+                    manifest,
+                    {
+                        "schema": 1,
+                        "record_type": "trial_failed",
+                        "failure_source": "schedule_legacy",
+                        "condition_id": job["condition_id"],
+                        "mission": job["mission"],
+                        "algorithm": job["algorithm"],
+                        "top_k_level": job["top_k_level"],
+                        "top_k_rate": job["top_k_rate"],
+                        "top_k_cells": job["top_k_cells"],
+                        "trial_id": trial_id,
+                        "run_generation": failure.get("run_generation", ""),
+                        "device_id": failure.get("device_id", ""),
+                        "trial_status": "failed",
+                        "failure_reason": failure.get("reason", "unspecified"),
+                    },
+                    invalidation,
+                )
+            )
+            journaled_failure_keys.add(key)
+    watchdog_adjustments = [
+        _enrich(root, manifest, row, invalidation)
+        for row in core_journal
+        if row.get("record_type") == "watchdog_threshold_adjustment"
     ]
     complete_keys = {
         (
@@ -217,11 +288,11 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
     raw_calls: list[dict[str, Any]] = []
     raw_phases = [
         _enrich(root, manifest, row, invalidation)
-        for row in journal
+        for row in core_journal
         if row.get("record_type") == "call_phase"
     ]
     accepted: list[dict[str, Any]] = []
-    for row in journal:
+    for row in core_journal:
         if row.get("record_type") != "call_attempt":
             continue
         item = _enrich(root, manifest, row, invalidation)
@@ -246,6 +317,8 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
     reports = root / "reports"
     _write(reports / "raw_call_attempts.csv", raw_calls)
     _write(reports / "raw_call_phases.csv", raw_phases)
+    _write(reports / "trial_failures.csv", trial_failures)
+    _write(reports / "watchdog_threshold_adjustments.csv", watchdog_adjustments)
 
     robot_groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     system_groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
@@ -282,6 +355,9 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
                 "robot_id": robot_id,
                 "device_id": meta["device_id"],
                 "build_id": meta.get("build_id", ""),
+                "journaled_at": min(
+                    float(row.get("journaled_at", 0)) for row in rows
+                ),
                 **_stats(rows),
             }, invalidation)
         )
@@ -303,6 +379,9 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
                 "run_generation": key[2],
                 "device_id": meta["device_id"],
                 "build_id": meta.get("build_id", ""),
+                "journaled_at": float(
+                    trial.get("journaled_at", meta.get("journaled_at", 0))
+                ),
                 "scenario_file": trial["scenario_file"],
                 "scenario_sha256": trial["scenario_sha256"],
                 "trial_status": trial["trial_status"],
@@ -319,8 +398,14 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
         by_condition[row["condition_id"]].append(row)
     condition_rows: list[dict[str, Any]] = []
     for job in schedule["jobs"]:
+        if job.get("excluded_from_core") or job.get("status") == "excluded":
+            continue
         rows = by_condition.get(job["condition_id"], [])
-        representative = job["status"] == "complete" and invalidation is None
+        representative = (
+            job["status"] == "complete"
+            and not job.get("failed_trials")
+            and invalidation is None
+        )
         condition_calls = by_condition.get(job["condition_id"], [])
         base = _enrich(root, manifest, {
             "condition_id": job["condition_id"],
@@ -333,6 +418,7 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
             "stopped_reason": job.get("stopped_reason", ""),
             "representative": representative,
             "completed_trial_count": len(job["completed_trials"]),
+            "failed_trial_count": len(job.get("failed_trials", [])),
             "planned_trial_count": len(job["trial_ids"]),
             "historical_system_csv": job.get("historical_system_csv", ""),
             "historical_system_sha256": job.get(
@@ -347,6 +433,13 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
                     }
                 )
             ),
+            "mixed_device_condition": len(
+                {
+                    str(row.get("device_id", ""))
+                    for row in condition_calls
+                    if row.get("device_id")
+                }
+            ) > 1,
             "build_ids": ";".join(
                 sorted(
                     {
@@ -366,6 +459,9 @@ def rebuild_hil_reports(root: Path) -> dict[str, Any]:
         "raw_phases": len(raw_phases),
         "accepted_calls": len(accepted),
         "completed_trials": len(system_rows),
+        "failed_trials": len(trial_failures),
+        "watchdog_adjustments": len(watchdog_adjustments),
+        "excluded_conditions": len(excluded_condition_ids),
         "condition_rows": len(condition_rows),
         "analysis_valid": invalidation is None,
         "invalidation": invalidation,
