@@ -2856,3 +2856,37 @@ The completed observed coverage is ACBBA 24 rows, CBAA 27, DMCHBA 23, HIPC
 29, and PI 23. No DGA metric log exists in either capture on any of the four
 robots, so coverage and a header-only DGA export explicitly record the absence
 instead of fabricating or inferring trials.
+
+## 2026-08-02 - Five-board collaborative HIL resume
+
+- Verified all five campaign Pololus at 125 MHz and MicroPython 1.24.0:
+  COM3=`e4621cb30b0b342f`, COM11=`e4621cb30b4b372f`,
+  COM12=`e4621cb30b2b352f`, COM13=`e4621cb30b43372f`, and
+  COM14=`e4621cb30b16392f`.
+- COM14 could identify as MicroPython but could not enter the replay protocol.
+  Its repaired production filesystem no longer contained the replay modules.
+  Deployed the current frozen replay module set to all five boards; all five
+  deployments reported `main_py_changed=false`, and direct pre/post hashes
+  confirmed every production `main.py` remained unchanged.
+- The full one-repetition five-board preflight passed. Firmware, build IDs,
+  deployed module hashes, frequencies, persistent smokes, allocator parity,
+  context restores, clean-worker isolation, calibration tolerance, and
+  motor/sensor non-initialization all passed on every board.
+- The repository reorganization had moved the campaign-bound build and
+  scenario paths and changed host/build artifact hashes after V8 was paused.
+  Added a provenance-preserving implementation segment at epoch
+  `1785715642.45742`. Earlier records retain their original segments and
+  manifest hashes. The new segment retains the identical collaborative
+  simulator SHA-256
+  `42be2063cd8d47f54e7bc35df5c1f2b5dad17700764e8d86f1d3c2c502349497`
+  and device source-bundle SHA-256
+  `2539f0c4fe4db9ca6287187ad6ff1c96f70dd9a348a9db27b27887dd76a1b268`;
+  its deployed module-set SHA-256 is
+  `e97e688ba8d7f2f7717cc390e2e147639f2a2e7fdb50ad5287e8a97ceb17fda3`.
+  Post-cutover verification passed all implementation, build, host,
+  simulator, scenario, and connected-device checks.
+- Resumed `pololu_native_persistent_v8` at 17:07 PDT as hidden PID 70920 with
+  all five boards. All boards claimed collaborative HIPC 10% trials, journals
+  advanced continuously, and runner stderr remained empty. The first two
+  resumed trials completed successfully and their workers immediately claimed
+  subsequent HIPC/DGA work.
