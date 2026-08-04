@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "campaign_id": "pololu_native_persistent_v8",
+  "publication_status": "terminal_with_capped_conditions",
+  "missions": [
+    "collaborative"
+  ],
+  "coverage": {
+    "collaborative": {
+      "condition_count": 48,
+      "complete_condition_count": 33,
+      "completed_with_trial_failures_condition_count": 7,
+      "timing_cap_stopped_condition_count": 8,
+      "successful_system_trial_count": 390,
+      "failed_trial_count": 10
+    }
+  },
+  "verification": {
+    "schedule_status_complete": true,
+    "schedule_active_trial_count": 0,
+    "core_condition_count": 96,
+    "unique_condition_ids": 96,
+    "expected_condition_matrix_present": true,
+    "successful_system_trial_keys_unique": true,
+    "four_robot_rows_per_successful_system_trial": true,
+    "condition_trial_counts_match_detail_tables": true,
+    "all_metrics_rows_analysis_valid": true,
+    "allocator_equals_filter_plus_exclusive_for_all_metrics_rows": true
+  },
+  "source": {
+    "campaign_path": "Results/HIL/AllocatorReplay/ActiveCampaigns/pololu_native_persistent_v8",
+    "published_tables": [
+      "Results/HIL/AllocatorReplay/ActiveCampaigns/pololu_native_persistent_v8/reports/*.csv (collaborative rows)"
+    ],
+    "campaign_manifest_sha256": "5707d91201b5ebdb81d3797ff2e476a37979b5b5468bf83771f97cc454e8a559",
+    "schedule_sha256": "31779c47d6abe40587f52d51947141065d56c9a0716137eeef41d510651cd186",
+    "schedule_status": "complete",
+    "raw_call_attempts_bytes": 357467685,
+    "raw_call_phases_bytes": 859293409
+  },
+  "files": [
+    {
+      "name": "collaborative_hil_topk_all_k_condition_aggregate_metrics.csv",
+      "bytes": 50798,
+      "sha256": "d14a0650e78e255189f623036b76808c577410fb7aecc463b6c15a9713d8289a",
+      "description": "One row per terminal algorithm-by-Top-K condition, including status, trial counts, timings, and provenance.",
+      "rows": 48
+    },
+    {
+      "name": "collaborative_hil_topk_all_k_combined_trial_level_system_and_timing_results.csv",
+      "bytes": 496773,
+      "sha256": "e5d45109622844a10257264f2e13fb150ee0c219ea035fad7eb7cf9a0f130a0c",
+      "description": "One row per successful HIL system trial with performance, timing, call-count, and provenance fields.",
+      "rows": 390
+    },
+    {
+      "name": "collaborative_hil_topk_all_k_robot_trial_timing_and_allocator_metrics.csv",
+      "bytes": 1725141,
+      "sha256": "a723582107c8db01e54025bf8fd12688dd20457aeabfff932dec5d821bba1018",
+      "description": "Four device-level timing rows for each successful HIL system trial.",
+      "rows": 1560
+    },
+    {
+      "name": "collaborative_hil_topk_all_k_failed_trial_log.csv",
+      "bytes": 18970,
+      "sha256": "908809e82425d43ab9450ffcf9db093ed39b3c2d5a92ebd7987feb9a5e6ac99a",
+      "description": "All failed HIL trial attempts in this publication scope.",
+      "rows": 10
+    },
+    {
+      "name": "collaborative_hil_topk_all_k_watchdog_threshold_adjustment_log.csv",
+      "bytes": 35781,
+      "sha256": "5e015a6e875858848925de79ac92e79c1e00f1385a86fa57fe5c4b5e46509dfe",
+      "description": "All repeated-state watchdog threshold adjustments in this publication scope.",
+      "rows": 35
+    }
+  ],
+  "notes": [
+    "Terminal does not mean every condition produced successful trials.",
+    "Stopped conditions are explicit 30-second-per-call timing-cap results, not missing files.",
+    "Raw call-attempt and call-phase reports remain in the ignored local campaign because each exceeds GitHub's per-file size limit."
+  ]
+}

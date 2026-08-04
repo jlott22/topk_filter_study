@@ -18,3 +18,8 @@ incomplete, or non-study-target rows are aggregated.
 Average filter and allocator times are weighted per call: total microseconds
 divided by total calls across all four robots. Compute time is derived per robot
 as `max(0, trial_time_ms - motor_time_ms)` before summing or averaging.
+`max_steps_any_robot` is the highest per-robot `steps` value within the matched
+four-robot trial.
+
+Coverage is five validated trials for each of ACBBA, CBAA, DMCHBA, HIPC, and
+PI. No DGA physical-trial log was captured, so DGA is absent from this dataset.

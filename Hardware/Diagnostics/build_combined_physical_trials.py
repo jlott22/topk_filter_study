@@ -183,6 +183,7 @@ def aggregate(
         "source_structural_repair_rows": sum(row["structural_repair"] != "none" for row in rows),
         "total_steps": total_steps,
         "avg_steps_per_robot": mean(steps),
+        "max_steps_any_robot": max(steps),
         "total_msgs_sent": total_msgs_sent,
         "total_msgs_received": total_msgs_received,
         "message_receive_to_send_pct": (total_msgs_received / total_msgs_sent * 100.0) if total_msgs_sent else 0.0,
@@ -512,6 +513,11 @@ incomplete, or non-study-target rows are aggregated.
 Average filter and allocator times are weighted per call: total microseconds
 divided by total calls across all four robots. Compute time is derived per robot
 as `max(0, trial_time_ms - motor_time_ms)` before summing or averaging.
+`max_steps_any_robot` is the highest per-robot `steps` value within the matched
+four-robot trial.
+
+Coverage is five validated trials for each of ACBBA, CBAA, DMCHBA, HIPC, and
+PI. No DGA physical-trial log was captured, so DGA is absent from this dataset.
 """
     (OUTPUT_ROOT / "README.md").write_text(readme, encoding="utf-8")
 

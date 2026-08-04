@@ -51,3 +51,6 @@ aggregate and failure files below when analyzing missing or censored coverage.
 
 The immutable source report remains at
 `../../AllocatorReplay/ActiveCampaigns/pololu_native_persistent_v8/reports/bayesian_final/`.
+The completed collaborative portion and a combined two-mission publication are
+available under `../../Collaborative/CompletedTopKCampaignV8/` and
+`../../CombinedTopKCampaignV8/`, respectively.
