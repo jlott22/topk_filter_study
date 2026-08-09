@@ -1,0 +1,974 @@
+SYSTEM DESIGN AND METHODOLOGY SOURCE AUDIT
+Value-ranked Top-K candidate-set restriction
+Audit date: 2026-08-05
+
+Scope and interpretation
+------------------------
+This report traces the currently executed source paths in this repository. Comments are used only to identify regions; conclusions below follow executable statements, configuration values, manifests, and published result tables. "AGX" means the CPython simulation campaign recorded on the aarch64 Tegra host. "HIL" means the Pololu-authoritative RP2040 hardware-in-the-loop path. "Physical" means the standalone Hardware/Algorithms/Pololu_*.py testbed programs. Line numbers refer to the current repository snapshot and may shift after edits.
+
+Path convention: after a full path has been given, later references may use its unique repository-relative suffix (for example, "Bayesian base.py," "native collaborative base.py," "build_analysis_tables.m," or "physical CBAA.py"). These refer respectively to Simulation/Architecture/simulator/benchmark_sim/algorithms/base.py, Simulation/Architecture/allocator_replay/device/native/collaborative/base.py, Results/Analysis/value_ranked_candidate_restriction_matlab/build_analysis_tables.m, and Hardware/Algorithms/Pololu_CBAA.py. Collaborative simulator paths are explicitly labeled and live under Simulation/dcta_benchmark_sim/known_visit_sim.
+
+A. CANDIDATE RANKING
+====================
+
+1. Exact Bayesian ranking key
+
+Direct answer: Bayesian candidates are ranked lexicographically by
+
+    (-local target probability, Manhattan distance from the robot's current cell, (x, y)).
+
+Thus larger local probability is preferred, then shorter Manhattan distance, then smaller x, then smaller y. The filter does not rank by A* path cost, probability-adjusted allocation cost, insertion cost, or allocator utility. Those quantities may be used later by the allocator after filtering.
+
+Evidence: Simulation/Architecture/simulator/benchmark_sim/algorithms/base.py -- AllocatorBase._filter_candidate_cells, lines 139-157; _filter_probability, lines 159-174; _manhattan_distance, lines 293-295. The production packed implementation expresses the same order explicitly in PackedCandidateMixin._candidate_precedes at Simulation/Architecture/simulator/benchmark_sim/algorithms/memory_optimized.py, lines 159-176.
+
+Platform differences: AGX base and optimized Bayesian implementations use the above x-then-y tie-break. Generated RP2040 CBAA/ACBBA/PI/HIPC and DGA inherit the same logical order; native RP2040 DMCHBA implements probability descending, distance ascending, x ascending, y ascending in device/native/bayesian/dmchba_complete.py, lines 436-453. Physical Pololu programs duplicate the same tuple; for example Hardware/Algorithms/Pololu_CBAA.py, lines 1497-1513. Numerical representations differ across platforms, as detailed in answers 35-36.
+
+2. Exact Collaborative Visit ranking key
+
+Direct answer: The AGX Collaborative Visit key is also
+
+    (-local target probability, Manhattan distance, (x, y)).
+
+Active targets are initialized/evaluated with equal mission probability in the standard known-target visit condition, so Manhattan distance is normally the effective primary key, followed by x then y.
+
+Evidence: Simulation/dcta_benchmark_sim/known_visit_sim/algorithms/base.py -- AllocatorBase._filter_candidate_cells, lines 154-172. RP2040 native code: Simulation/Architecture/allocator_replay/device/native/collaborative/base.py -- NativeAllocatorBase.candidates, lines 17-41.
+
+Platform differences: RP2040 collaborative code uses encoded target cell ID as the last key, not the coordinate tuple: (-probability, distance, y*grid_size+x), base.py lines 24-34 and state.py lines 71-100, 160-178. Therefore its exact-tie order is row-major y then x. The AGX order is x then y. This is a confirmed semantic difference for equal-probability, equal-distance targets. No collaborative physical-testbed campaign exists in the supplied results.
+
+3. Distance used by the filter
+
+Direct answer: Manhattan distance from the robot's current logical cell to the candidate. It is not A* distance, probability-adjusted edge cost, or route insertion cost.
+
+Evidence: Bayesian base.py lines 148-153 and 293-295; Collaborative base.py lines 163-170 and 275-277; packed Bayesian memory_optimized.py lines 228-245; native collaborative state.distance as invoked by native collaborative base.py lines 25-31.
+
+Platform differences: AGX, HIL, and physical Bayesian filters all use Manhattan distance. Later allocator scoring/path planning differs and may use probability-adjusted cost or insertion cost, but that occurs after the filter.
+
+4. Per-robot/local ranking
+
+Direct answer: Yes. Each robot independently constructs and ranks candidates using its own current position, local searched/completed belief, and local probability/target state.
+
+Evidence: Both base filters receive robot and read robot.pos and robot.target_p (Bayesian base.py lines 139-174; collaborative base.py lines 154-188). HIL snapshots one resident robot context at a time and calls that context's allocator (device/common/replay_persistent.py lines 273-314 and 417-428).
+
+Platform differences: AGX stores local robot state in the simulator process; HIL stores/restores each logical robot's allocator context on an RP2040; physical robots maintain their own maps locally. The logical rule is the same, but message timing and local-belief divergence are physically real only on the testbed.
+
+5. Deterministic tie-breaking
+
+Direct answer: AGX Bayesian and Collaborative use coordinate tuple (x,y), i.e. x first then y. Generated/native Bayesian HIL and physical Bayesian use the same x-then-y rule. Native collaborative HIL uses encoded row-major cell ID y*grid+x, i.e. y first then x. Robot ID is not part of the candidate-filter tie-break.
+
+Evidence: Bayesian base.py lines 150-155; memory_optimized.py lines 159-176; native Bayesian DMCHBA lines 436-453; physical CBAA lines 1507-1511; native collaborative base.py lines 24-31 and state.py lines 160-178.
+
+Platform differences: The collaborative HIL row-major tie-break is the material cross-platform exception. Stable input order only governs the unrestricted pass-through case when no sort/selection is performed.
+
+6. Determinism when ranking values tie
+
+Direct answer: Yes within each implementation, because a final coordinate or cell-ID key resolves exact value/distance ties. However, AGX Collaborative and RP2040 Collaborative can deterministically choose different candidates because their final key orders differ.
+
+Evidence: Same regions as answers 1, 2, and 5. Candidate scans are also deterministic nested-grid or sorted-target scans (memory_optimized.py lines 230-246; collaborative state.py lines 71-100).
+
+Platform differences: Determinism is supported per platform; identical cross-platform ordering is not fully supported for Collaborative Visit exact ties.
+
+B. DEFINITION AND APPLICATION OF K
+==================================
+
+7. Percentage-to-K conversion
+
+Direct answer: For the 19x19 Bayesian grid,
+
+    K = max(1, int(361*r + 0.5)),
+
+where r is the retained fraction. For positive values this is round-half-up, not Python banker's round. Collaborative Visit uses the same precomputed rule against 50 initial targets:
+
+    K = max(1, int(50*r + 0.5)).
+
+Evidence: Simulation/Architecture/simulator/benchmark_sim/run_trials.py -- resolve_top_k_settings, lines 66-76; run_topk_campaign.py -- top_k_cells, lines 102-115. Collaborative fixed values are recorded in Simulation/Architecture/allocator_replay/config/study.py, lines 30-38, and Simulation/Studies/hil_aligned_simulation/core.py, lines 83-86 and 250-295.
+
+Platform differences: AGX runners calculate/store the absolute K before a trial. HIL manifests transmit that fixed integer. The physical hub transmits a fixed top_k_cells value. There is no per-call percentage conversion on an RP2040.
+
+8. Basis from which K is calculated
+
+Direct answer: K is fixed from the scenario's maximum/initial basis: 361 grid cells for Bayesian search and 50 initially known targets for Collaborative Visit. It is not recalculated from the current valid-candidate count.
+
+Evidence: run_trials.py lines 66-76; hil_aligned_simulation/core.py lines 235-238 (top_k_basis="grid_cells") and 292-295 (top_k_basis="initial_targets"); config/study.py lines 19-38.
+
+Platform differences: Same fixed K is passed to AGX, HIL, and physical Bayesian runs. Current candidate count only determines whether filtering is a pass-through.
+
+9. Minimum retained count
+
+Direct answer: Configured percentage conversion always yields at least K=1. If there are zero valid candidates, the returned candidate list is still empty; the code does not fabricate a candidate.
+
+Evidence: run_trials.py line 73; run_topk_campaign.py line 103; base filters lines 139-157/154-172.
+
+Platform differences: Same logical behavior on all platforms.
+
+10. Pass-through when current count <= K
+
+Direct answer: Yes. The base implementations return all current candidates without truncation when limit is absent or limit >= current count.
+
+Evidence: Bayesian base.py lines 139-146; Collaborative base.py lines 154-161; packed Bayesian memory_optimized.py lines 248-267; native collaborative base.py lines 21-36; physical CBAA lines 1497-1506.
+
+Platform differences: The ordering/work performed in that pass-through case differs as described next.
+
+11. Work performed in the pass-through case
+
+Direct answer: It is implementation- and allocator-dependent.
+
+* Base AGX and physical full-list implementations collect/copy the candidate list but do not compute the ranking key or sort when count <= K.
+* Optimized packed Bayesian CBAA/ACBBA/PI still compute probability and Manhattan distance for every valid candidate during collection, but do not run bounded selection when count <= K.
+* Packed Bayesian HIPC uses always_rank=True and ranks even at 100%.
+* DGA and reference HIPC pre-rank their candidates before passing them to the base filter, so ranking can occur even when the base filter passes through.
+* Native collaborative CBAA/ACBBA/PI/DMCHBA do not sort in pass-through; native HIPC and DGA call candidates(always_rank=True) and do sort.
+
+Evidence: memory_optimized.py lines 218-267 and HIPC mixin lines 369-385; DGA.py lines 505-521; native collaborative base.py lines 17-36, hipc.py line 70, dga.py line 60; physical CBAA lines 1497-1513.
+
+Platform differences: Therefore "100% has zero filter work" is false. Candidate discovery/validity work is always timed, and some allocators still rank at 100%.
+
+12. Exact tested settings and K values
+
+Direct answer:
+
+Mission/platform                         Tested label -> absolute K
+Bayesian AGX simulation                  K=1->1; 1%->4; 3%->11; 5%->18; 10%->36; 25%->90; 50%->181; 75%->271; 100%->361
+Collaborative AGX simulation             K=1->1; K=2 (4%)->2; 5%->3; 10%->5; 25%->13; 50%->25; 75%->38; 100%->50
+Bayesian RP2040 HIL original manifest    Same nine settings; core published HIL excludes K=1 and contains 1%-100%
+Collaborative RP2040 HIL                 Same eight settings as Collaborative simulation
+Physical Bayesian validation             CBAA 3%->11; ACBBA 10%->36; PI 10%->36; HIPC 10%->36; DMCHBA 5%->18; no DGA run
+
+Evidence: config/study.py lines 19-38; hil_aligned_simulation/core.py lines 78-86; Results/HIL/AllocatorReplay/ActiveCampaigns/pololu_native_persistent_v8/manifest.json job fields top_k_level/top_k_cells; Results/Hardware/PhysicalTrials/CombinedTrials/combined_metrics_per_trial.csv columns algorithm, top_k_rate, top_k_max_cells; analysis_config.m lines 80-85.
+
+Platform differences: Collaborative percent labels are rounded study labels around fixed K (notably K=2 is reported as 4%, and 5% of 50 becomes K=3). Physical validation uses one selected feasible K per algorithm rather than the full grid.
+
+13. Representation of absolute K=1
+
+Direct answer: Yes. It is labeled "K=1" and stored with an exact fixed fraction (1/361 Bayesian, 1/50 Collaborative), distinct from Bayesian "1%" (K=4). Collaborative also has fixed "K=2" (2/50=4%).
+
+Evidence: config/study.py lines 19-38 and Condition.slug, lines 73-87; hil_aligned_simulation/core.py lines 78-86.
+
+Platform differences: The distinction is preserved in simulation and HIL manifests/results. No physical K=1 validation was run.
+
+14. K=1 exclusion from primary analysis/publication
+
+Direct answer: mapConditions assigns missing Mode to any K=1 row, and primary paired/figure construction filters rows with missing Mode. K=1 remains in the failure table/rate figure. Bayesian HIL K=1 was additionally archived and excluded from core report generation.
+
+Evidence: Results/Analysis/value_ranked_candidate_restriction_matlab/build_analysis_tables.m -- mapConditions, lines 217-253; paired subset filter, lines 458-461. README.md lines 16-29 states the publication mapping. HIL report exclusion is Simulation/Architecture/allocator_replay/hil/report.py lines 214-248. Campaign manifest cutover points to results/allocator_replay/hil_campaigns/pololu_native_persistent_v8/archive/bayesian_k1_removed_20260801 (manifest.json top-level cutover/archive region).
+
+Platform differences: Simulation source rows retain K=1; primary plots omit it except failures. Bayesian core HIL CSVs contain no K=1 conditions. Collaborative HIL K=1 remains in its dataset but is still excluded from primary Mode-based performance/compute plots.
+
+C. INTERACTION WITH ALLOCATOR STATE
+====================================
+
+15. What filtering can remove
+
+Direct answer: The filter restricts candidates admitted to a new allocation/reallocation solve. It does not globally delete winner tables or received messages merely because a task is outside Top-K. Its effect on stored paths is allocator-specific:
+
+* CBAA: a valid, currently owned destination is returned before candidate filtering; Top-K gates only a new claim.
+* ACBBA and PI: repaired committed prefixes remain, and Top-K gates refill/insertion candidates.
+* HIPC: rebuilds a local team plan from the current restricted list, so a previously planned future cell can disappear when the bundle is replaced.
+* DMCHBA: follows its stored path until a normal trigger; at reassignment, Top-K defines Hungarian tasks and therefore assignments/matrix dimensions.
+* DGA: at reallocation, repair removes chromosome tasks not in the restricted candidate set and fills from that set; its committed path can consequently change.
+
+Evidence: CBAA.py choose/claim region lines 130-177; ACBBA.py bundle repair/build lines 75-157; PI.py lines 112-203; HIPC.py lines 92-155 and 277-312; DMCHBA.py lines 85-230 and 449-457; DGA.py lines 283-304 and 383-420.
+
+Platform differences: Generated Bayesian HIL follows these logical paths except native DMCHBA has a packed equivalent. Native Collaborative and physical standalone implementations are separate ports; they implement the same broad retention/replanning model but are not byte-identical.
+
+16. Protection of current destinations
+
+Direct answer: Generally yes. Current destinations/committed leading tasks are retained until completion, local invalidation, collision/replan handling, loss through normal consensus/deconfliction, or an algorithm-defined reallocation trigger. Top-K alone does not evict CBAA's current valid task.
+
+Evidence: CBAA.py current assignment resolution region lines 130-177; physical CBAA _pick_task_cell_impl lines 1711-1735. ACBBA/PI repair their existing paths before refill; DMCHBA _reallocation_trigger lines 136-165 and _prune_invalid_path lines 449-457.
+
+Platform differences: Same design is present across the respective ports, but physical message/order/collision events can cause normal invalidation/deconfliction at different times.
+
+17. Can a committed future task disappear solely due to a new Top-K set?
+
+Direct answer: Yes for algorithms that rebuild or repair future-plan state against the current candidate universe, especially HIPC and DGA. No for CBAA's single current destination; ACBBA/PI protect a valid retained prefix and use Top-K for refill. DMCHBA does not prune its active path solely on Top-K between triggers, but a triggered Hungarian rebuild can replace it.
+
+Evidence: HIPC.py _build_bundle/_replace_own_bundle_if_changed lines 112-155 and 277-312; DGA.py current-path seeding/repair lines 283-304 and 383-420; DMCHBA.py lines 136-230.
+
+Platform differences: Same category-level behavior is intended in HIL/physical ports. Collaborative HIL's different exact-tie order can change which future task enters a rebuilt plan.
+
+18. Uniform restricted-set interface
+
+Direct answer: Not fully. All allocators conceptually call a candidate-list method, but the executed implementation is not one single allocator-independent function. Base classes provide _filter_candidate_cells, optimized Bayesian classes use _packed_candidate_cells, native DMCHBA has _prepare_candidates, native collaborative has candidates, and physical programs duplicate per-algorithm candidate code.
+
+Evidence: Bayesian base.py lines 125-157; memory_optimized.py lines 149-268; native Bayesian DMCHBA lines 358-453; native collaborative base.py lines 17-41; Hardware/Algorithms/Pololu_*.py candidate functions.
+
+Platform differences: The claim "allocator-independent preprocessing concept" is supported. The stronger claim "one identical preprocessing implementation for all allocators/platforms" is not supported.
+
+19. Exceptions, bypasses, protected tasks, duplicated logic
+
+Direct answer: CBAA bypasses filtering while retaining a current assignment. ACBBA/PI filter only during bundle refill. Optimized PI caches one candidate list during a bundle build to avoid repeated filtering. HIPC and DGA request always-ranked candidate order. DMCHBA may call candidate construction for an assignment signature and for a triggered assignment in the reference path. Candidate logic is duplicated in native HIL and each physical file.
+
+Evidence: memory_optimized.py PIOptimizationMixin lines 468-494; HIPC optimized lines 369-385; DGA.py lines 505-521; DMCHBA.py _assignment_input_signature lines 594-604 and _run_assignment lines 167-230; physical CBAA lines 1497-1521 as representative duplication.
+
+Platform differences: These differences explain why filter-call counts vary within one algorithm/K condition and why not every choose_goal invocation executes the expensive allocation algorithm.
+
+20. Direct effects on algorithm-specific state
+
+Direct answer: Filtering directly changes the input task universe; downstream algorithm code then changes algorithm state. It can limit bundle/path refill, HIPC team-plan content, DMCHBA clone count and Hungarian matrix size, and DGA chromosome/population repair. It does not change configured horizon length itself and does not directly truncate global consensus/winner tables simply for being outside Top-K.
+
+Evidence: ACBBA.py lines 97-157; HIPC.py lines 112-155 and 206-276; DMCHBA.py lines 179-230 (ceil(tasks/agents), matrix size); DGA.py lines 383-420. Consensus changes occur through normal algorithm message/repair code, not in base filter.
+
+Platform differences: Native DMCHBA materializes packed task/matrix workspaces rather than Python structures; Collaborative native allocators use target slots. Logical downstream sensitivity remains, but representation differs.
+
+D. FILTER IMPLEMENTATION AND TIMING BOUNDARIES
+==============================================
+
+21. Top-K selection algorithm
+
+Direct answer:
+
+Implementation/allocator                    Selection procedure
+AGX Bayesian CBAA/ACBBA/PI/HIPC             Reusable arrays plus bounded insertion selection of the best K; not a heap. HIPC always ranks.
+AGX Bayesian DMCHBA                          Full Python sorted(... ) when restricted.
+AGX Bayesian DGA                             Prebuild/full-sort candidate tuples; restricted base path may sort again; optimized GA changes plan storage, not this candidate ranking.
+AGX Collaborative                           Base full sort when restricted; HIPC/DGA pre-rank even when unrestricted.
+RP2040 Bayesian generated four + DGA         Corresponding generated optimized code; bounded insertion for CBAA/ACBBA/PI/HIPC, DGA pre-sort behavior.
+RP2040 Bayesian native DMCHBA                 Bounded insertion into a fixed-capacity uint16 candidate array.
+RP2040 Collaborative                          Full list sort when restricted; HIPC/DGA always sort.
+Physical Bayesian                             Full list sort and slice/delete in each standalone program; HIPC/DGA have their algorithm-specific pre-ranking behavior.
+
+Evidence: memory_optimized.py lines 149-268; base.py lines 139-157; DGA.py lines 505-521; native Bayesian dmchba_complete.py lines 358-453; native collaborative base.py lines 17-41; physical CBAA lines 1497-1513.
+
+Platform differences: The selected logical top K is usually equivalent, but asymptotic procedure and allocation behavior are not identical.
+
+22. Execution order
+
+Direct answer: The common logical order is (1) scan locally valid tasks, (2) perform validity checks, (3) obtain local probability, (4) compute Manhattan distance, (5) rank/select if needed, and (6) construct the returned candidate representation/list. Base implementations first build/copy an unrestricted list, then compute ranking keys inside sorted. Packed implementations combine scanning, validity, probability, and distance into one pass, then bounded-select, then construct coordinate tuples. Host/device serialization occurs after the timed allocator call in HIL.
+
+Evidence: base.py lines 139-157; memory_optimized.py lines 218-268; native collaborative base.py lines 17-41; replay_worker.py lines 848-975.
+
+Platform differences: AGX uses Python lists/tuples and optimized typed arrays; HIL uses typed arrays/bytearrays and bounded protocol output; physical uses local Python lists/tuples. Serialization is not part of filter time.
+
+23. Contents of measured candidate-filter time
+
+Direct answer: It measures the entire decorated/candidate method: candidate discovery, validity checking, probability and distance retrieval/calculation performed there, sorting/selection, truncation, and construction/copying of its return list. It is cumulative when one allocator call invokes the filter multiple times.
+
+Evidence: Bayesian timed_candidate_filter wrapper, base.py lines 13-27; Collaborative wrapper, base.py lines 13-27; HIL nested sample sum, replay_worker.py lines 858-918; physical wrapper, CBAA lines 1516-1521.
+
+Platform differences: perf_counter_ns is used on AGX; ticks_us/ticks_diff on HIL and physical. The wrapped implementations differ, so "filter time" measures the platform's actual filter implementation, not a normalized abstract operation.
+
+24. Does filter timing include candidate generation/validity?
+
+Direct answer: Yes. Timing starts before _candidate_cells/_packed_candidate_cells/native candidates scans for valid tasks. It does not begin after an already-built unrestricted set.
+
+Evidence: timed_candidate_filter wraps the complete candidate method (base.py lines 13-27); memory_optimized.py decorator at line 218 followed by scan at lines 230-246; physical CBAA starts at line 1517 before _candidate_cells_impl.
+
+Platform differences: Same boundary intent across platforms.
+
+25. Allocation, copies, tuples, and garbage collection in filter timing
+
+Direct answer: Any allocation, copying, tuple construction, and interpreter garbage collection that occurs while the timed filter method runs is included. No explicit gc.collect is called inside the HIL/AGX filter regions. Physical gc.collect is explicitly called before the trial-loop allocator call, so that explicit collection is excluded; an incidental automatic collection inside the filter would still be included.
+
+Evidence: base.py lines 18-25 and list(candidates) at line 140; memory_optimized.py lines 152-157 and 265-268; physical CBAA trial loop lines 2040-2058.
+
+Platform differences: Different object-allocation pressure and garbage collectors make the measured times platform-specific.
+
+26. Allocator-exclusive time
+
+Direct answer: Allocator-exclusive time is the elapsed enclosing choose_goal/pick_task_cell call minus the cumulative nested candidate-filter samples recorded during that same call. It includes the allocator's remaining state repair, scoring, consensus bookkeeping, optimization/Hungarian/GA work, decision/debug/message construction performed inside choose_goal, and incidental interpreter overhead. It excludes operations before/after the enclosing call.
+
+Evidence: AGX robot.py lines 294-307; HIL replay_worker.py lines 871-933; physical timing helper and pick_task_cell wrapper, Hardware/Algorithms/Pololu_CBAA.py lines 161-189 and 1738-1744.
+
+Platform differences: HIL times runtime.choose_goal on the RP2040; AGX times allocator.choose_goal in CPython; physical times the standalone allocator entry point. These are analogous boundaries but not identical code bodies.
+
+27. Combined = filter + exclusive
+
+Direct answer: Yes by construction, subject only to max(0, ...) protection:
+
+    allocator_exclusive = max(0, combined_allocator_elapsed - cumulative_filter_elapsed)
+    combined_allocator_elapsed = filter + allocator_exclusive
+
+For valid nested samples where filter <= combined, the equality is exact in integer timer units.
+
+Evidence: robot.py lines 300-307; replay_worker.py lines 907-933; physical record_allocator_time lines 174-189.
+
+Platform differences: AGX stores nanoseconds then reports milliseconds; HIL/physical store microseconds.
+
+28. Timer locations
+
+Direct answer:
+
+* AGX combined timer: robot.py lines 294-300, immediately around allocator.choose_goal. Filter timer: algorithms/base.py lines 13-27 around candidate discovery; allocator-exclusive subtraction: robot.py lines 301-307.
+* RP2040 HIL combined timer: replay_worker.py lines 870-875 around runtime.choose_goal; filter samples are cleared/read at lines 858-918; exclusive subtraction at lines 929-933; PTIMED is emitted at lines 959-974 before result serialization.
+* Physical combined timer: Pololu_CBAA.py pick_task_cell lines 1738-1744 and timing helpers lines 161-189; candidate timer lines 1516-1521. The other Pololu_*.py files use the same pattern around their allocator-specific entry points.
+
+Evidence: Simulation/Architecture/simulator/benchmark_sim/core/robot.py lines 291-313; simulator/benchmark_sim/algorithms/base.py lines 13-27; allocator_replay/device/common/replay_worker.py lines 858-974; Hardware/Algorithms/Pololu_CBAA.py lines 161-189 and 1516-1744.
+
+Platform differences: perf_counter_ns versus ticks_us; CPython versus MicroPython; physical calls occur only post-clue, while simulator choose_goal is invoked pre-clue for serpentine behavior but candidate filtering/allocation logic is inactive until the clue.
+
+29. Excluded operations
+
+Direct answer: Movement, sensing, A* path planning, simulator message-bus delivery, radio/USB transfer, host waiting, fixture/state decoding, and result serialization are outside the combined allocator timer. HIL peer-message callback application is performed during untimed state-delta setup; outbound-message draining and chunked response transmission are after PTIMED. A message object/queue entry constructed inside choose_goal is included, but actual transport is not.
+
+Evidence: AGX robot.py bus pump lines 263-270, allocator timer lines 294-313, message publish line 322, A* planning lines 335-345; HIL replay_persistent.py apply_delta/events lines 347-415, choose_goal lines 417-428, drain_messages lines 430-438; replay_worker.py lines 959-975; transport.py lines 1174-1218.
+
+Platform differences: Physical flush/radio service and motion are outside pick_task_cell, though real communication order can change subsequent allocator state. Host HIL call latency is not reported as device allocator time.
+
+30. AGX versus RP2040 filter implementation
+
+Direct answer: The ranking concept is mostly shared, but implementation parity is qualified. Optimized Bayesian AGX and generated Bayesian HIL use the same packed bounded-insertion logic for CBAA/ACBBA/PI/HIPC; DGA retains its algorithm-specific pre-sort; RP2040 DMCHBA is a separate packed native port. Collaborative AGX uses coordinate tuples and a full sort; Collaborative HIL uses slots/encoded IDs and a full sort, with the confirmed row-major tie-break difference. Physical Bayesian uses duplicated full sorts rather than the optimized bounded-selection implementation.
+
+Evidence: memory_optimized.py lines 149-268; device/physical/factory.py lines 1-38; native Bayesian dmchba_complete.py lines 358-453; native collaborative base.py lines 17-41; build manifest source_provenance and module list in Simulation/Architecture/allocator_replay/builds/micropython_1_24_o0/manifest.json.
+
+Platform differences: Algorithmic complexity, object allocation, numeric storage, and collaborative exact-tie semantics differ; the high-level probability/distance restriction rule is shared.
+
+E. ALLOCATOR PARAMETERS AND IMPLEMENTATION PARITY
+==================================================
+
+31. Planning horizons actually used
+
+Direct answer:
+
+Algorithm    Bayesian Top-K    Collaborative Top-K
+CBAA         1                 1
+ACBBA        3                 3
+PI           3                 3
+HIPC         3                 3
+DMCHBA       3                 3
+DGA          3                 3
+
+CBAA is a single-task/current-assignment allocator. The study profile forces commitment_horizon=3 for the other algorithms.
+
+Evidence: Bayesian defaults: ACBBA.py line 34, PI.py line 67, HIPC.py line 36, DMCHBA.py line 67, DGA.py line 43; run_trials.py lines 342-352 forces 3. Collaborative defaults: known_visit_sim/algorithms/ACBBA.py line 14, PI.py line 16, HIPC.py line 15, DMCHBA.py line 20, DGA.py line 20; hil_aligned_simulation/core.py lines 50-53 and 279-282. Physical CBAA.py line 70; combined physical CSV commitment_horizon column confirms 3 for all other tested algorithms.
+
+Platform differences: Current AGX, HIL manifest, and physical validation use the same 1/3 pattern. DGA was not physically validated.
+
+32. Comparison with the supplied benchmark horizons
+
+Direct answer: They do not generally match the listed benchmark vector. Matches are CBAA 1/1, Bayesian PI=3, Collaborative HIPC=3, Collaborative DMCHBA=3, and Bayesian DGA=3. Mismatches are ACBBA (used 3/3 versus 8/5), Collaborative PI (3 versus 5), Bayesian HIPC (3 versus 5), Bayesian DMCHBA (3 versus 5), and Collaborative DGA (3 versus 1).
+
+Evidence: Same source regions as answer 31; the enforcing profile is config.py lines 120-140 and run_trials.py lines 342-352.
+
+Platform differences: This is a study-wide parameter choice, not an AGX/HIL discrepancy. A manuscript statement claiming use of the supplied benchmark horizons would be inaccurate.
+
+33. DGA parameters
+
+Direct answer:
+
+* Generations/iterations per reallocation trigger: 25.
+* Population size: 30.
+* Crossover probability: 0.7.
+* Mutation probability: 0.3.
+* Elite count: 2.
+* Tournament size: default 3.
+* Commitment horizon: 3.
+* Fitness: maximum route cost + 0.05 * total route cost; each route edge uses probability-adjusted cost distance + 8*(1-normalized probability).
+* Crossover: for each robot, concatenate random contiguous segments from the two parent routes, then repair.
+* Mutation: uniformly choose move, swap, reinsert, reverse, or clean, then repair.
+* Repair: retain each valid unique candidate at most once, discard entries outside the restricted candidate set, then append all missing candidates to the robot minimizing (append cost, current route length, robot ID).
+
+Evidence: Simulation/Architecture/simulator/benchmark_sim/algorithms/DGA.py constants lines 39-48; fitness lines 219-240; crossover lines 306-334; mutation lines 336-381; repair lines 383-420; tournament lines 454-464. Shared probability-adjusted cost is base.py lines 176-283, with alpha=8 defined in AllocatorBase.
+
+Platform differences: DGA_optimized.py packs population/routes into arrays and masks but retains the same constants/search procedure. Equivalence tests compare decisions, populations, fitness, and 25 generations in Tests/Simulation/Bayesian/test_dga_optimized_equivalence.py lines 129-227. Native Collaborative DGA is a separate MicroPython port; no physical DGA dataset exists.
+
+34. Same allocator implementations/parameters as benchmark code
+
+Direct answer: The Top-K simulation imports the allocator classes in the included benchmark_sim and known_visit_sim packages, so it uses those repository implementations. It does not match the supplied external benchmark horizon values except where listed in answer 32, and Collaborative Visit intentionally uses the 50-target modification. Therefore "same included allocator code with study-specific horizon/scenario controls" is supported; "unchanged original benchmark parameters" is not.
+
+Evidence: hil_aligned_simulation/core.py lines 69-75 and 200-303 import the six exact classes and pass horizon 3/ideal communication/Top-K; run_topk_campaign.py condition construction lines 102-115. Production class aliases include optimized mixins at the ends of CBAA.py, ACBBA.py, PI.py, HIPC.py, and DGA.py lines 1296-1301.
+
+Platform differences: HIL compiles/ports those logical allocators but has native exceptions. Physical programs are independent standalone copies.
+
+35. RP2040 implementation changes
+
+Direct answer:
+
+* Build/runtime: modules are compiled to .mpy for MicroPython 1.24 with optimization level 0; CPython-only imports/type constructs are adapted by device/build.py. No motors/sensors/main.py initialization is included.
+* Data structures: fixed-width arrays (notably uint16 cell IDs), bytearray masks, compact slot indices, and reusable workspaces replace many dictionaries/tuple collections.
+* Numerical storage: explicit array('f'), array('d'), integer/fixed-point cost arrays, and scaled integer costs are used in native ports. The preflight confirms double-array support, but the width of every ordinary MicroPython float object is not established by source.
+* Persistent state: one allocator/robot context remains resident; the host sends initial state then deltas/events. DGA RNG/population fields are streamed separately to bound memory.
+* Hungarian: native Bayesian DMCHBA uses reusable packed workspaces and scaled integer/fixed-point costs rather than constructing the AGX Python matrix representation.
+* GA: DGA_optimized stores plans/populations in packed arrays/masks; this optimization is also the production AGX class, not solely an RP2040 change. Collaborative HIL DGA is a separate native port.
+* Sorting: packed bounded insertion for optimized Bayesian filters; native Collaborative uses list.sort over slots; native DMCHBA uses bounded insertion.
+* Garbage collection: no explicit gc.collect is inside the HIL timed choose_goal/filter region. Automatic collection may occur and would be included.
+* Native/viper: no @micropython.native or @micropython.viper decorator is used in the inspected replay allocator modules.
+* Messages/protocol: allocator-specific peer messages are created on device. State/result fields are transported over ASCII framed, sequence-numbered, CRC-checked base64 chunks; PTIMED precedes result streaming.
+
+Evidence: device/common/replay_persistent.py lines 273-438; device/common/replay_worker.py lines 848-975; host/transport.py lines 639-744, 1116-1218; native Bayesian dmchba_complete.py lines 1-110 and 358-453; native Collaborative state.py lines 66-100; DGA_optimized.py packed-plan/repair regions; build manifest fields compiled, optimization, safety, files, source_provenance.
+
+Platform differences: AGX has effectively unconstrained host memory and CPython objects; HIL is explicitly memory-bounded. Physical programs also use typed arrays and explicit gc.collect, but their monolithic code and communication stack differ.
+
+36. Classification of RP2040 differences
+
+Direct answer:
+
+Difference                                      Classification
+.mpy compilation/import/type adaptation        Performance/compatibility-only by design.
+Reusable arrays, bytearrays, packed plans       Performance-only where equivalence tests cover output/state; otherwise supported with qualification.
+Persistent context and delta transport          Performance/protocol-only by design; potential behavior risk if restore is incomplete, mitigated by context-restore/preflight tests.
+Generated Bayesian CBAA/ACBBA/PI/HIPC logic     Performance-only intent; randomized equivalence tests compare candidates, decisions, state, and messages.
+Packed DGA representation                       Performance-only intent; exact reference/optimized tests include production K=271.
+Native Bayesian DMCHBA fixed/scaled costs        Potentially behavior-changing through quantization/tie behavior, despite intended logical parity.
+Native Collaborative separate ports             Potentially behavior-changing generally.
+Collaborative encoded-ID tie-break               Confirmed behavior-changing in exact distance/probability ties (y,x versus AGX x,y).
+Different numeric/runtime precision              Potentially behavior-changing for close scores/ties.
+ASCII/chunk/CRC transport outside timing          Performance/protocol-only unless a transport error causes retry; it is not allocator semantics.
+
+Evidence: Tests/Simulation/Bayesian/test_allocator_memory_optimized_equivalence.py lines 252-350; test_dga_optimized_equivalence.py lines 129-227; native source regions cited in answers 30 and 35; Preflight device_checks/context_restore sections in Results/HIL/AllocatorReplay/Preflight/device_preflight.json.
+
+Platform differences: Classifications concern AGX-to-HIL. Physical-to-HIL identity is addressed next.
+
+37. Is physical allocator code identical to HIL code?
+
+Direct answer: No. Physical validation runs standalone monolithic Hardware/Algorithms/Pololu_CBAA.py, Pololu_ACBBA.py, Pololu_PI.py, Pololu_HIPC.py, and Pololu_DMCHBA.py. HIL loads replay_b_*.mpy/generated modules plus native DMCHBA and native collaborative modules through allocator_replay. A physical adapter/factory exists, but the standalone physical programs do not import it.
+
+Evidence: Simulation/Architecture/allocator_replay/device/physical/factory.py lines 1-38; build manifest module list/source_provenance; entry/import regions of Hardware/Algorithms/Pololu_*.py.
+
+Platform differences: Shared formulas/parameters and parity tests support logical similarity, not identical executed code. No physical Collaborative or DGA implementation was validated in the published physical dataset.
+
+F. EXPERIMENTAL MATRIX AND PAIRING
+==================================
+
+38. Exact trial counts
+
+Direct answer: Planned and recorded matrices are:
+
+AGX Bayesian simulation: 6 algorithms x 9 K settings x 500 scenario rows = 27,000 condition-trials. Every algorithm/K has exactly 500 rows. Completed/failed counts:
+
+Algorithm  K=1      1%       3%       5%       10%      25%      50%      75%      100%
+CBAA       499/1    500/0    500/0    500/0    500/0    500/0    500/0    500/0    500/0
+ACBBA      500/0    498/2    500/0    500/0    500/0    500/0    500/0    500/0    500/0
+PI         500/0    498/2    500/0    500/0    500/0    500/0    500/0    500/0    500/0
+HIPC       456/44   496/4    500/0    499/1    498/2    500/0    499/1    500/0    500/0
+DMCHBA     446/54   500/0    500/0    500/0    500/0    500/0    500/0    500/0    500/0
+DGA        457/43   500/0    500/0    500/0    500/0    500/0    499/1    500/0    500/0
+
+Each cell is completed/failed. One HIPC 5% failure is represented by 499 completed and one failed row even where a blank display may occur in spreadsheet summaries.
+
+AGX Collaborative simulation: 6 algorithms x 8 K settings x 100 trials = 4,800 rows; every algorithm/K has 100 completed and zero failed.
+
+Bayesian HIL core: 6 algorithms x 8 non-K1 settings x 25 planned = 1,200 planned. It contains 793 completed trial rows and 3 watchdog trial failures; 17 timing-stopped conditions did not launch/finish all planned trials. Exact completed/failed by condition:
+
+Algorithm  1%      3%      5%      10%     25%     50%     75%     100%
+CBAA       25/0    25/0    25/0    25/0    25/0    25/0    25/0    25/0
+ACBBA      25/0    25/0    24/1*   25/0    25/0    25/0    14/0#   25/0
+PI         25/0    24/1*   25/0    25/0    25/0    25/0    0/0#    25/0
+HIPC       24/1*   25/0    25/0    25/0    25/0    7/0#    0/0#    0/0#
+DMCHBA     25/0    25/0    25/0    25/0    0/0#    0/0#    0/0#    0/0#
+DGA        0/0#    0/0#    0/0#    0/0#    0/0#    0/0#    0/0#    0/0#
+
+* completed_with_trial_failures/nonrepresentative. # condition stopped by timing_unusable_30s.
+
+The original study target was 25 Bayesian trials per condition. The final ACBBA 5% condition CSV records planned_trial_count=24 after cutover even though it retains 24 completed rows plus one failed setup/trial record; this reporting-field inconsistency is preserved here rather than silently normalized.
+
+Collaborative HIL: 6 algorithms x 8 settings x 10 planned = 480 planned; 390 completed and 10 watchdog trial failures. Exact exceptions from 10/0 are: PI K=2 9/1; HIPC K=1 9/1, 5% 9/1, 25% 9/1, 50% 9/1 (planned count recorded as 9 for that cutover); DMCHBA 5% 6/4 and 10% 9/1; DMCHBA 75%/100% 0/0 timing-stopped; DGA 5%,10%,25%,50%,75%,100% 0/0 timing-stopped. All other collaborative HIL conditions are 10/0.
+
+Physical: five algorithms x five trials = 25 validated system rows; DGA has zero physical trials.
+
+Evidence: Published simulation CSVs under Results/Simulation/Bayesian/Published and Results/Simulation/Collaborative/Published, grouped by algorithm/top_k_level/trial_status; HIL condition CSVs under Results/HIL/Bayesian/CompletedTopKCampaignV8 and Results/HIL/Collaborative/CompletedTopKCampaignV8; physical combined_metrics_per_trial.csv. Planned counts/config: hil_aligned_simulation/core.py lines 44-53; config/study.py lines 19-43.
+
+Platform differences: Simulation has full high-N matrices. HIL stops only hardware-infeasible conditions and retains completed trials, but marks nonrepresentative condition aggregates. Physical is a five-scenario validation subset.
+
+39. Scenario reuse and pairing
+
+Direct answer:
+
+* Within each AGX mission, the same scenario file/trial IDs are reused across all six algorithms and all K levels.
+* HIL samples fixed trial IDs once and reuses them across algorithm/K: Bayesian [7,12,32,45,50,56,67,80,94,108,127,132,164,166,178,216,226,233,274,313,358,371,388,398,424]; Collaborative [10,12,14,26,30,31,32,41,49,74]. Scenario hashes link them to the historical simulation files.
+* Physical uses source episodes [4,53,232,394,473] across all five tested algorithms. Those are matched to simulation by source_episode for validation, but they are not the HIL sampled IDs.
+
+Evidence: hil_aligned_simulation/core.py lines 33-59; HIL manifest trial selection fields; Hardware/Diagnostics/build_combined_physical_trials.py lines 34-42; validation innerjoin in build_analysis_tables.m lines 713-737.
+
+Platform differences: Simulation-HIL pairing is exact scenario/trial identity. Physical matching is episode/target-based and not a match to the HIL sample.
+
+40. Communication conditions
+
+Direct answer: AGX Top-K simulation and HIL host simulation use the ideal communication model. Physical trials set synthetic msg_drop_rate/drop_rate to zero, but real UART/radio/MQTT delivery is not an ideal zero-delay deterministic simulator channel.
+
+Evidence: hil_aligned_simulation/core.py Bayesian command lines 215-216 and Collaborative lines 267-268; published CSV comm_model=ideal. Physical CBAA.py lines 92-99 and combined CSV drop_rate=0.0.
+
+Platform differences: "All simulation and HIL Top-K experiments use ideal communication" is supported. Extending "ideal" to the physical testbed is not.
+
+41. Randomized and fixed scenario components
+
+Direct answer:
+
+Bayesian randomized components: target/object coordinate per episode and four clue coordinates drawn by weighted sampling without replacement using a stable per-episode seed. Fixed components: 19x19 grid, four robots, edge-even starts/headings, four clues, distribution exponent/profile, algorithm/K condition, ideal communication, and scenario file across comparisons. The committed final_trial_500.csv records base_seed=None, so the original master object-generation seed is not determinable from the provided source/results; exact coordinates are nevertheless fixed by the CSV.
+
+Collaborative randomized components: 50 distinct target cells sampled without replacement from non-start cells using random.Random(seed=20311176). Fixed components: 19x19 grid, four edge-even starts, 50 targets, ideal communication, and same scenario rows across conditions.
+
+HIL trial selection is reproducibly sampled with seeds 20260727 and 20311176; HIL does not generate new mission geometry. DGA also consumes seeded allocator RNG state.
+
+Evidence: clue_object_generator_manhat.py lines 30-61 and 83-121; known_visit_sim/generate_scenarios.py lines 23-55; config/study.py lines 8-18 and 45-50; HIL manifest selection fields.
+
+Platform differences: Physical trials fix target locations corresponding to the five source episodes, but source does not prove that all simulated clue coordinates/order or stochastic event ordering were physically reproduced.
+
+42. Sequential or concurrent AGX timing trials
+
+Direct answer: Conditions/shards ran concurrently in separate single-threaded worker processes. Within one simulator process, trials execute sequentially. The primary campaign used nine pinned worker cores out of twelve available cores.
+
+Evidence: Results/Simulation/Bayesian/primary_topk_campaign/campaign_config.json fields workers=9, worker_cores=[0..8], orchestrator_cores=[9,10,11], cpu_affinity_rule; run_topk_campaign.py scheduling/worker region lines 875-1005. The low-K supplement similarly uses a threaded host queue launching condition subprocesses, hil_aligned_simulation/core.py lines 474-514.
+
+Platform differences: HIL ran multiple whole trials concurrently across separate Pololus, with each trial's calls sequential on one board. Physical trials are real concurrent multi-robot missions, not parallel condition execution.
+
+43. CPU/power/priority controls
+
+Direct answer: CPU affinity is explicitly applied: one single-thread simulator process per worker core; common numerical-library thread counts are set to one; PYTHONHASHSEED=0 is set. Three cores were reserved for orchestration. No source-controlled evidence establishes AGX power mode, nvpmodel setting, clock locking, CPU governor, niceness/process-priority adjustment, JetPack release, or thermal controls.
+
+Evidence: campaign_config.json fields cited above; run_topk_campaign.py process environment/affinity regions around lines 235-250 and 907-947.
+
+Platform differences: RP2040 preflight verifies 125 MHz on all boards and cross-device timing tolerance. Physical code does not establish clock locking. Unlisted AGX controls are Not determinable from the provided source.
+
+44. Warm-up and first calls
+
+Direct answer: A separate serial smoke trial is run before the primary AGX campaign, but production timing does not discard a per-condition or per-allocator warm-up call. Every allocator choose_goal invocation in a recorded production trial is appended, including a trial's first choose_goal call. In Bayesian AGX the wrapper invokes choose_goal during the pre-clue search phase, but candidate filtering/actual allocation is inactive until first clue; those pre-clue choose_goal durations are separately counted as pre-clue allocator samples. Physical pick_task_cell is called only after first_clue_seen.
+
+Evidence: run_topk_campaign.py smoke region around lines 949-968; robot.py lines 291-313; physical CBAA.py lines 2055-2059.
+
+Platform differences: HIL preflight smoke/calibration calls are separate from campaign journals. Physical initialization/calibration occurs before trial metrics; no allocator warm-up exclusion is evident.
+
+45. Failed simulation trials
+
+Direct answer: Failures are retained as explicit trial rows with trial_status="failed", failure_type/message, and unavailable performance/timing fields rather than a penalty or a capped step value. Retry campaigns may replace a failed attempt with a completed result at a higher event cap. Primary analyses filter to completed/analysis-valid rows.
+
+Evidence: benchmark_sim/run_trials.py failed-row construction lines 417-463 and trial write/status handling lines 619-709; hil_aligned_simulation/core.py lines 544-563 and 619-640; build_analysis_tables.m lines 115-132 and 458-461.
+
+Platform differences: HIL failures additionally retain raw call attempts and generation IDs; only completed accepted generations enter core timing. Physical operator-rejected runs are documented/excluded by build_combined_physical_trials.py lines 279-396.
+
+46. Inclusion rule for paired K versus 100%
+
+Direct answer: Yes. Both the K row and its R0/100% baseline must be completed and analysis-valid, finite, and share TrialID; the baseline metric must be nonzero.
+
+Evidence: build_analysis_tables.m lines 458-493. It filters completed/valid rows first, then innerjoins current and baseline by TrialID.
+
+Platform differences: Same analysis rule is applied to simulation and HIL inputs. Physical validation is not a K-versus-100% pairing.
+
+47. Hollow performance markers
+
+Direct answer: A hollow marker indicates that a mode has fewer completed pairs than the maximum pair count available for that algorithm's plotted series. The exact condition is isfinite(counts) & counts < max(counts,[],'omitnan'). It is therefore a reduced paired-sample marker, not a generic "failed trial" marker.
+
+Evidence: plot_ps_performance.m lines 20-36; plot_cv_performance.m lines 20-36.
+
+Platform differences: The same figure rule is used for AGX/HIL data when plotted. No equivalent physical performance curve is produced.
+
+G. HIL ARCHITECTURE AND TIMING CAP
+==================================
+
+48. HIL execution path
+
+Direct answer: The host runs mission dynamics: scenario loading, simulated movement, sensing, path planning, event scheduling, communication bus, and trial/watchdog logic. At each choose_goal trigger it snapshots the current logical robot/allocator state, sends an initial context or bounded delta plus queued peer/callback events to an RP2040, and waits. The RP2040 applies setup untimed, runs/times choose_goal, and returns PTIMED followed by goal, outbound allocator messages, and mutable post-state. The host applies that returned state, inserts returned messages into the normal simulator message path, and advances the mission. One complete logical trial remains on one board; no desktop shadow choose_goal controls decisions.
+
+Evidence: Simulation/Architecture/allocator_replay/hil/campaign.py _run_trial, lines 94-230; hil/bridge.py AuthoritativeBridge call/apply region lines 409-795 and make_proxy_allocator lines 972-1064; device/common/replay_persistent.py lines 273-438; replay_worker.py lines 848-975.
+
+Platform differences: AGX-only simulation executes allocator and environment in the same host process. HIL moves only allocator execution/state mutation to RP2040. Physical runs environment, sensing, motion, and allocator on four separate robots without host simulation.
+
+49. Host-device interface
+
+Direct answer: USB serial COM ports using a custom ASCII framed protocol. Bulk values are base64 chunks with sequence numbers, CRC32 validation, acknowledgements/retransmission, and bounded result streaming. Devices are identified by machine.unique_id rather than COM number in campaign records.
+
+Evidence: host/transport.py imports/protocol helpers lines 3, 147-184; chunk upload lines 639-744; persistent chunk receive lines 1116-1167; HIL preflight devices array in device_preflight.json.
+
+Platform differences: Physical peer communication uses the robot communication stack/UART topics, not this host replay protocol.
+
+50. Peer-message generation and processing
+
+Direct answer: Algorithm-specific peer messages are generated on-device as a consequence of choose_goal. The host mediates routing through the simulator's communication bus. When delivered to a recipient, the host queues the message as an event; the recipient RP2040 context applies the corresponding algorithm callback before its next timed choose_goal. Thus message semantics/state updates are on-device, while delivery scheduling is host-simulated.
+
+Evidence: replay_persistent.py _apply_event lines 375-415 and drain_messages lines 430-438; hil/bridge.py accepted-message handling lines 672-794 and proxy queue_message/make_messages lines 972-1064.
+
+Platform differences: AGX processes callbacks in the simulator process. Physical peers transmit/process messages on actual robots with real communication latency/order.
+
+51. Preservation of scenarios, triggers, and event order
+
+Direct answer: HIL uses the same scenario files/hashes and the same simulator runner, robot mechanics, allocator callback triggers, and logical event scheduler as the matching simulation. The proxy replaces choose_goal and allocator callbacks while leaving environment progression on the host. Hardware wall-clock delay does not advance simulated mission time. Exact allocator outputs can still diverge because the RP2040 ports/numerics/tie-breaks differ, which then changes subsequent simulated paths/events.
+
+Evidence: campaign.py lines 94-158; bridge.py proxy factory lines 972-1064; HIL manifest scenario hashes and selected IDs.
+
+Platform differences: Scenario/event framework parity is supported; identical end trajectories are not guaranteed and are explicitly what validation measures. Physical execution has genuinely asynchronous sensor/communication/motion events.
+
+52. Unit to which the 30-second cap applies
+
+Direct answer: One acknowledged, combined filter-plus-allocator choose_goal call. It is not an entire trial and not allocator-exclusive time alone.
+
+Evidence: config/study.py lines 50-52; transport.py lines 1174-1203 starts the deadline after PCALL_READY and waits for PTIMED; replay_worker.py lines 871-874 times runtime.choose_goal including nested filtering.
+
+Platform differences: The cap is HIL-only. AGX uses event caps for trial progression, not a 30-second allocator-call limit. Physical trials do not apply this HIL watchdog.
+
+53. Watchdog versus censoring
+
+Direct answer: Both. It is an execution watchdog that interrupts/resets a nonreturning device call, and it is a feasibility/censoring rule: a reproducible two-of-three timeout marks the condition timing_unusable_30s and prevents partial condition averages from being treated as representative.
+
+Evidence: bridge.py attempt loop lines 458-720; report.py representative/condition aggregation lines 396-455; build_analysis_tables.m CapStopped lines 190-213 and feasibility lines 600-610.
+
+Platform differences: HIL only.
+
+54. What happens after a cap exceedance
+
+Direct answer: The host records a timeout attempt, interrupts/resets/restarts the worker, reloads the persistent context from the clean pre-call snapshot, and retries the same call up to three total timing attempts. At least two timeout outcomes classify the condition timing_unusable_30s. Only that condition stops; transport failures are recovered/retried separately and do not count as timing attempts.
+
+Evidence: bridge.py _restart_after_failed_attempt/_recover_attempt lines 350-408; attempt handling lines 458-720. transport.py ReplayTimeout and run_persistent_ready lines 1174-1203.
+
+Platform differences: HIL only. Memory failures have a parallel reproducibility classification memory_unusable rather than timing_unusable.
+
+55. Storage of capped calls
+
+Direct answer: A timed-out call is not stored as an accepted 30,000,000-us device allocator sample. Its raw attempt journal records timeout status, configured timeout_seconds, and host-side elapsed diagnostics near the deadline; true device choose_goal elapsed is unavailable because PTIMED never arrived. The trial generation remains incomplete/failed and is excluded from accepted timing summaries.
+
+Evidence: hil/bridge.py _timeout_result lines 100-112 and call-attempt journal construction lines 163-257, timeout branch lines 525-546; hil/report.py accepted_for_analysis logic lines 294-316.
+
+Platform differences: AGX failed trials similarly do not receive an artificial time penalty. Physical has no 30-second cap.
+
+56. Condition-level representation and plots
+
+Direct answer: A capped condition has status="stopped", stopped_reason="timing_unusable_30s", representative=false, completed/failed/planned counts, device/build hashes, and raw attempt evidence. Aggregate allocator/filter/exclusive statistics are populated only for representative conditions; partial averages are blank/nonrepresentative. MATLAB marks CapStopped if reason contains 30s/timing_unusable or maximum observed call >=30000 ms, excludes it from hardware-feasible tradeoff selection, and displays a cap-stopped state rather than a normal compute value.
+
+Evidence: hil/report.py lines 396-455; build_analysis_tables.m lines 190-213, 289-400, 600-610; plot_compute_heatmaps.m lines 69-107; plot_filter_share_heatmaps.m lines 26-35; plot_failure_rates.m lines 38-49.
+
+Platform differences: HIL-specific. Simulation failures are trial-level event-cap rows rather than condition-level hardware-feasibility stops.
+
+57. Source-controlled platform information
+
+Direct answer:
+
+RP2040/HIL established by source/results:
+* Five devices in the final preflight.
+* implementation="micropython-1.24.0".
+* build_id="micropython_1_24_o0_2539f0c4fe4d", compatibility 1.24, compiled .mpy, optimization=0.
+* CPU frequency 125,000,000 Hz for each board.
+* initial reported heap_free 154,816 bytes per device; preflight also verifies double_array support. This is free heap at inspection, not a documented hardware "memory mode."
+* firmware SHA-256 c64e31b161421148abdd87a4eea541048456e8e99e6db08407499b0dfa7bfb7c.
+
+AGX established by campaign config:
+* Linux-5.15.148-tegra-aarch64-with-glibc2.35, aarch64, 12 available CPUs, nine pinned workers.
+* The scenario path contains username/host wording "agxorin," but the exact AGX product model is not explicitly recorded as a platform field.
+
+Not determinable from the provided source: exact AGX model, JetPack release, Ubuntu distribution release, production Python version, AGX nvpmodel/power mode, CPU/GPU/EMC clock lock settings, and process niceness. The kernel/glibc string is not sufficient to infer those safely.
+
+Evidence: Results/HIL/AllocatorReplay/Preflight/device_preflight.json -- devices and device_checks regions; Simulation/Architecture/allocator_replay/builds/micropython_1_24_o0/manifest.json -- build/optimization/safety fields; Results/Simulation/Bayesian/primary_topk_campaign/campaign_config.json -- host/CPU/worker fields.
+
+Platform differences: RP2040 frequency and firmware are explicitly verified; AGX power/clock controls are not.
+
+H. PHYSICAL VALIDATION
+======================
+
+58. Physical-validation matrix
+
+Direct answer: Four robots; five Bayesian clue-search trials per algorithm; five algorithms (CBAA, ACBBA, PI, HIPC, DMCHBA); 25 validated system trial rows; no DGA. Source episodes are 4, 53, 232, 394, and 473, mapped respectively to physical target coordinates 5/9, 7/2, 3/11, 5/4, and 13/16.
+
+Evidence: Hardware/Diagnostics/build_combined_physical_trials.py -- ROBOT_IDS/TARGETS/ALGORITHMS, lines 33-44; Results/Hardware/PhysicalTrials/CombinedTrials/manifest.json target_mapping region; README.md lines 8-25; combined_metrics_per_trial.csv rows/fields.
+
+Platform differences: This is a small physical Bayesian validation set, not the full simulation/HIL matrix. Collaborative Visit and DGA were not physically validated.
+
+59. Physical K values
+
+Direct answer: Verified exactly:
+
+CBAA 3%, K=11; ACBBA 10%, K=36; PI 10%, K=36; HIPC 10%, K=36; DMCHBA 5%, K=18; DGA has no physical condition.
+
+Evidence: Results/Hardware/PhysicalTrials/CombinedTrials/combined_metrics_per_trial.csv fields algorithm, top_k_rate, top_k_max_cells; analysis_config.m lines 80-85; README.md lines 24-25.
+
+Platform differences: These are selected feasible operating points from the Bayesian study rather than uniform K across algorithms.
+
+60. Direct matching of physical scenarios
+
+Direct answer: Physical rows are matched to AGX simulation by algorithm, selected rate, and source_episode. The target coordinate for each physical trial is explicitly tied to that episode. They are not matched to the HIL sample (different episode IDs), and the source does not prove that every simulated clue location, sensing event, communication ordering, or obstacle interaction was physically recreated. Therefore "episode/target-matched to simulation" is supported; "the identical full scenario and HIL trial were physically replayed" is not.
+
+Evidence: build_combined_physical_trials.py lines 34-42; build_analysis_tables.m physical pairing lines 725-737; HIL sampled IDs in hil_aligned_simulation/core.py lines 55-59.
+
+Platform differences: Simulation-HIL uses scenario hashes/full state; physical pairing is coarser and based on episode/target metadata.
+
+61. Logical grid and starts
+
+Direct answer: Yes. Physical programs use a 19x19 logical grid and starts/headings 00:(0,0) east, 01:(0,6) east, 02:(0,12) east, 03:(0,18) east. These match the simulation/HIL study configuration.
+
+Evidence: Hardware/Algorithms/Pololu_CBAA.py lines 65-73 and START_CONFIG lines 465-478; allocator_replay/config/study.py lines 8-17. The other standalone Pololu programs duplicate these controls.
+
+Platform differences: Logical coordinates match. Physical cell traversal/calibration is embodied motion rather than simulator state updates.
+
+62. Physical differences that can change maximum robot steps
+
+Direct answer: Physical maximum steps can change through real clue detection and target-bump detection; motor/intersection calibration; missed/duplicate line intersections; bump retreat; path failures; collision/yield logic; robot pose/local-map errors; real communication latency/loss/reordering despite configured synthetic drop=0; different timing of consensus and sensor callbacks; manually placed clues/target; and the standalone allocator/numeric implementation. Metrics stop after target discovery and before return-home, so return-home does not affect reported search steps.
+
+Evidence: physical CBAA.py trial state/step counters lines 76-100; clue/target update regions around lines 1015-1095 and 1304-1315; run_active_trial lines 2035-2195; search_loop lines 2199-2248. Metrics are written at line 2228 before return_home lines 2231-2247.
+
+Platform differences: AGX and HIL movement/sensing/communication are simulated and deterministic for a scenario; physical execution introduces the above embodied sources of variation.
+
+I. METRIC DEFINITIONS AND AGGREGATION
+=====================================
+
+63. Maximum robot steps
+
+Direct answer: For a completed system trial,
+
+    max_steps_any_robot = max(steps recorded by each robot in the team).
+
+Evidence: Simulation/Architecture/simulator/benchmark_sim/metrics/summary.py line 269; run_topk_campaign.py lines 300-304 verifies it against robot rows. HIL campaign.py trial finalization lines 196-230 records the same quantity. Physical build_combined_physical_trials.py lines 133-186 uses max(steps).
+
+Platform differences: The aggregation is identical; the underlying meaning of one step is a simulator cell action versus a physical intersection/cell traversal counter.
+
+64. Total team steps
+
+Direct answer:
+
+    total_team_steps = sum(per-robot steps across all four robots).
+
+Evidence: simulation summary.py line 200 and output line 245; HIL campaign.py trial finalization lines 196-230; physical build_combined_physical_trials.py lines 133-186.
+
+Platform differences: Same aggregation, different execution substrate.
+
+65. Exact analysis metric definitions
+
+Direct answer:
+
+* Mean combined time per call for a trial:
+
+      CombinedPerCallMs = CombinedTotalMs / AllocatorCalls
+
+  where CombinedTotalMs is team-summed enclosing allocator time and AllocatorCalls is team-summed calls.
+
+* Cumulative allocator time per trial:
+
+      CombinedTotalMs = sum of all combined allocator-call durations for all robots.
+
+* Aggregate condition filter share:
+
+      100 * sum(FilterTotalMs over valid trials) / sum(CombinedTotalMs over valid trials).
+
+* Paired compute reduction at K relative to 100%:
+
+      100 * (T_100 - T_K) / T_100.
+
+  The code first computes percent change 100*(T_K-T_100)/T_100 and negates its mean for MeanComputeSavingPct.
+
+* Paired max-step degradation:
+
+      100 * (S_K - S_100) / S_100.
+
+Evidence: build_analysis_tables.m standardized fields lines 120-182; safeDivide lines 272-275; condition filter share lines 374-382; paired changes lines 442-509.
+
+Platform differences: The same analysis formulas consume simulation and HIL trial rows. Physical validation compares raw step differences, not K-versus-100% percent degradation.
+
+66. Simulation mean-per-call aggregation order
+
+Direct answer: At trial level it is based on team totals divided by team calls: all robot call durations are pooled within a trial. It is not the unweighted average of four robot means. Across a condition, the current condition table reports descriptive statistics of trial-level CombinedPerCallMs; raw simulator robot/system reports also retain per-robot and team totals.
+
+Evidence: hil_aligned_simulation/core.py backfill lines 385-403 sums robot totals/calls; build_analysis_tables.m lines 120-138 and safeDivide. Simulation summary.py lines 63-139 constructs robot call statistics.
+
+Platform differences: AGX call durations are measured in one host runtime but attributed per robot. HIL pooling spans device IDs as explained next.
+
+67. HIL aggregation order
+
+Direct answer: HIL accepts raw call rows from completed accepted trial generations, groups them into robot-trial and system-trial rows, and calculates totals/statistics from those pooled call durations. System-trial mean is total accepted device allocator time divided by accepted call count; condition call statistics pool accepted raw calls for representative conditions. Device ID/mixed-device fields remain recorded.
+
+Evidence: Simulation/Architecture/allocator_replay/hil/report.py _stats lines 40-73; accepted-call selection lines 282-325; robot/system grouping lines 325-395; condition grouping lines 396-455.
+
+Platform differences: A single trial remains on one device, but different trials of a condition can be on different calibrated devices. Physical system metrics are aggregated from four simultaneously acting robot logs.
+
+68. Meaning of system allocator time
+
+Direct answer: It is a sum over all allocator calls from all four robots, not a mean or maximum. Separate maximum-call fields are also reported.
+
+Evidence: hil_aligned_simulation/core.py lines 395-402; published system CSV fields allocator_time_ms_team_total and allocator_time_ms_team_max; HIL system-trial CSV fields allocator_time_total_us and allocator_time_max_us; physical builder lines 188-211.
+
+Platform differences: Same sum definition. It is cumulative computation, not elapsed wall time when robots could compute concurrently.
+
+69. Synchronization of robot timing
+
+Direct answer: Timings are independently collected local elapsed durations. AGX uses one host monotonic clock source but separate call intervals; HIL/physical use each RP2040's ticks_us clock. There is no cross-robot clock synchronization used to sum timestamps, and none is required to sum durations.
+
+Evidence: robot.py lines 294-307; replay_worker.py lines 870-874; physical CBAA.py lines 161-189.
+
+Platform differences: HIL preflight requires matching 125 MHz firmware/build and timing medians within 5%, but it does not phase-synchronize clocks. Physical boards likewise time independently.
+
+70. Filter-share aggregation
+
+Direct answer: The primary aggregate filter share is a ratio of condition-level sums, 100*sum(filter total)/sum(combined total), which is call-duration weighted. The analysis also reports a separate mean and SD of per-trial filter-share ratios; those are not the primary aggregate ratio.
+
+Evidence: build_analysis_tables.m condition aggregation lines 374-382 and output fields FilterShareAggregatePct, FilterShareTrialMeanPct, FilterShareTrialSDPct lines 311-313/400.
+
+Platform differences: Same formula for simulation/HIL where valid totals exist. Cap-stopped nonrepresentative conditions have no normal aggregate filter share.
+
+J. STATISTICAL ANALYSIS AND VALIDATION
+=====================================
+
+71. Statistical tests located
+
+Direct answer: The current source-controlled MATLAB analysis performs:
+
+* two-sided one-sample paired t-tests on paired K-versus-100% percentage changes;
+* approximate Wilcoxon signed-rank tests on the same paired changes;
+* Holm step-down adjustments across nonbaseline modes within mission/platform/algorithm/metric;
+* validation paired t-tests and approximate signed-rank tests on raw observed-minus-simulation steps;
+* TOST equivalence tests on paired raw differences;
+* Pearson correlation, Lin concordance correlation coefficient (CCC), MAE, RMSE, and Bland-Altman limits;
+* environmental-sensitivity multivariate permutation omnibus tests, conditional pairwise curve permutation tests, and conditional level-wise permutation tests, with Holm correction.
+
+An auxiliary physical-versus-HIL timing script performs exact arithmetic-mean, log-mean, and rank/Mann-Whitney permutation tests, Cliff's delta, bootstrap intervals, stratified log-mean permutation, and Benjamini-Hochberg correction. Those are timing-validation analyses, not the primary K-response tests.
+
+Evidence: build_analysis_tables.m lines 442-590, 709-883, 1071-1503; analysis_config.m lines 58-64. Auxiliary: Hardware/Diagnostics/compare_physical_hil_timings.py lines 147-255 and 610-703.
+
+Platform differences: Tests operate on exported results, not on-device. No executable repeated-measures ANOVA is present in the current MATLAB package.
+
+72. Mission-performance changes across K
+
+Direct answer:
+
+Test: two-sided paired t-test, with approximate Wilcoxon signed-rank as a robust companion.
+Repeated-measures structure: pair each restricted mode with R0/100% within the same TrialID; there is no single omnibus repeated-measures ANOVA across all K.
+Pairing unit: scenario trial ID, separately within mission, platform, and algorithm.
+Factors: K/Mode is the compared within-trial condition; algorithm, mission, platform, and metric define separate groups rather than factorial fixed effects.
+Correction: Holm across all nonbaseline modes within each mission/platform/algorithm/metric.
+Effect size/estimate: mean, SD, median, and t 95% CI of paired percent change. No standardized Cohen d or rank-biserial effect size is computed for this table.
+Failures: only pairs with both completed, analysis-valid, finite values and nonzero baseline are used; pair completeness is reported.
+
+Evidence: build_analysis_tables.m lines 442-590.
+
+Platform differences: Same structure for AGX and HIL. HIL may have much lower pair completeness at hardware-stopped settings.
+
+73. Computation changes across K
+
+Direct answer: The structure is identical to answer 72, applied to Combined Time Per Call and Cumulative Combined Time. Values tested are paired percentage changes; MeanComputeSavingPct is the negative of the mean percent change. There is no log transform in this current source-controlled paired-change path and no standardized effect-size statistic.
+
+Evidence: build_analysis_tables.m metric fields/classes lines 443-449, percent-change formula lines 480-500, tests/corrections lines 515-590.
+
+Platform differences: Same analysis code for AGX/HIL. Cap-stopped calls/conditions do not receive artificial 30-second values.
+
+74. Formal tests of differing K-response profiles
+
+Direct answer: Not for the main Top-K curves across algorithms or missions. The code conducts separate algorithm-specific K-versus-R0 tests, so it does not estimate an algorithm-by-K or mission-by-K factorial interaction. Formal curve-profile permutation tests do exist for environmental sensitivity (grid size, team size, communication environment) within each algorithm/metric.
+
+Evidence: main pairing loops/group keys, build_analysis_tables.m lines 451-527; sensitivity curve tests lines 1071-1278 and statistics lines 1377-1503.
+
+Platform differences: Not platform-specific.
+
+75. Scale on which tests are performed
+
+Direct answer:
+
+* Main K-response tests: percentage changes from 100%, not raw values or logs.
+* Wilcoxon companion: ranks of those paired percentage changes.
+* Simulation-HIL and physical-simulation step validation: raw paired step values/differences.
+* TOST: raw step differences against absolute margins.
+* Sensitivity: normalized degradation curves across five restriction rates, tested through Euclidean/mean-separation permutation statistics.
+* Auxiliary physical-HIL timing analysis: raw arithmetic means, log-transformed means, and ranks in separate tests.
+
+Evidence: build_analysis_tables.m lines 442-493, 812-875, 1290-1503; compare_physical_hil_timings.py regions cited in answer 71.
+
+Platform differences: None in statistical code; input completeness differs.
+
+76. Multiple-comparison corrections
+
+Direct answer: Holm correction is used for primary K-mode paired t and signed-rank families, sensitivity omnibus families, sensitivity pairwise curves, and sensitivity level-wise follow-ups. Benjamini-Hochberg is used only in the auxiliary physical-HIL timing script. Validation paired t/TOST rows are reported without a multiple-comparison adjustment in buildValidationSummary.
+
+Evidence: build_analysis_tables.m holmAdjust lines 577-590; calls at lines 515-527, 1182, 1230, 1274. compare_physical_hil_timings.py lines 208-218 and 644-703. Validation lines 709-883 contain no adjustment step.
+
+Platform differences: Not platform-specific.
+
+77. Simulation-HIL validation details
+
+Direct answer: The reported paired p=0.956 is the two-sided paired Student t-test comparing HIL and simulation max_steps_any_robot on raw paired values; current workbook value is 0.95576. The pairing keys are Algorithm, retained Rate, and TrialID after completed/analysis-valid filtering. N=793 completed pairs. The equivalence procedure is TOST on observed-minus-simulation raw step differences; the +/-3-step result has p=9.2251e-09 and therefore supports equivalence at alpha=0.05. CCC is Lin's coefficient
+
+    2*cov(x,y)/(var(x)+var(y)+(mean(x)-mean(y))^2),
+
+and is 0.88199 overall for maximum steps.
+
+Evidence: build_analysis_tables.m lines 713-723, 758-883; Results/Analysis/value_ranked_candidate_restriction_analysis.xlsx, Validation worksheet, row Comparison="Simulation vs RP2040 HIL", Group="Overall", Metric="Max Robot Steps".
+
+Platform differences: HIL observed values arise from RP2040-authoritative decisions; simulation values are matching AGX trial/rate/algorithm rows.
+
+78. Physical-simulation validation details
+
+Direct answer: The reported p=0.0012 is the two-sided paired Student t-test on raw physical-versus-simulation maximum steps; current value 0.0012273. N=25 pairs, keyed by Algorithm, selected Rate, and source_episode/TrialID. The 95% CI is the standard paired-t confidence interval on the mean difference, not bootstrap: [1.0654, 3.8146] steps. TOST uses raw paired differences: +/-3 steps p=0.20438 (not equivalent at 0.05); +/-5 steps p=0.00039073 (equivalent). CCC is 0.98734.
+
+Evidence: build_analysis_tables.m lines 725-737, 758-883; value_ranked_candidate_restriction_analysis.xlsx Validation worksheet, Simulation vs Physical/Overall/Max Robot Steps row.
+
+Platform differences: Physical observations include embodied variability and standalone allocator code; simulation rows are exact episode/rate/algorithm matches.
+
+79. Incomplete/timing-capped HIL data in validation
+
+Direct answer: Timeout attempts, incomplete generations, and failed trial rows are excluded. However, completed analysis-valid trials from a condition that was later stopped by the 30-second rule are included because validation filters system trial rows only and does not join/exclude by condition CapStopped status. This includes the 14 completed ACBBA 75% and seven completed HIPC 50% Bayesian trials and is why N=793 equals all completed Bayesian HIL trial rows, not only representative-condition trials.
+
+Evidence: build_analysis_tables.m lines 713-720; HIL standardization lines 141-187; HIL condition CSV stopped rows; report.py accepted-call/system-trial construction lines 282-395.
+
+Platform differences: This qualification applies to HIL validation only. Condition-level compute summaries correctly mark those stopped conditions nonrepresentative.
+
+80. Code-versus-manuscript statistical discrepancies
+
+Direct answer: The current manuscript text was not provided, so a definitive manuscript comparison is Not determinable from the provided source. The implementation can be used to audit likely claims:
+
+* Current code does not implement a repeated-measures ANOVA across K, algorithm, or mission for the primary Top-K curves.
+* Current primary K tests use paired percent changes, not log-transformed times/ratios.
+* Current primary tables report paired-change summaries, not standardized effect sizes.
+* Current validation uses paired-t CIs and unadjusted TOST rows.
+* Completed trials from later timing-stopped HIL conditions enter the 793-pair validation.
+
+Any manuscript claiming otherwise would disagree with current code.
+
+Evidence: build_analysis_tables.m regions cited in answers 72-79. Current executable workbook sheets are ModeMap, Conditions, PairedChanges, Failures, HILFeasibility, Validation, Claims, sensitivity sheets, SourceAudit, and Settings; there is no omnibus repeated-measures ANOVA output sheet.
+
+Platform differences: Not platform-specific.
+
+K. FINAL CONSISTENCY AUDIT
+==========================
+
+81. Support for "same candidate restriction and allocator behavior across platforms"
+
+Direct answer:
+
+Fully supported:
+* Same mission-level candidate concept: locally valid unsearched Bayesian cells or locally incomplete known targets.
+* Same fixed K values/bases for matching simulation-HIL conditions.
+* Same probability-descending, Manhattan-distance-ascending ranking concept.
+* Same logical 19x19 grid, four robot starts, and study horizon pattern.
+* Same enclosing timing decomposition: combined choose_goal, nested filter, exclusive difference.
+* Exact scenario/trial identity for simulation-HIL comparisons.
+
+Supported with qualifications:
+* Generated Bayesian CBAA/ACBBA/PI/HIPC and optimized DGA reuse/compile repository logic and pass equivalence tests, but execute under MicroPython with packed state and different memory/runtime behavior.
+* Native Bayesian DMCHBA follows the same matching/scoring concept but uses fixed/scaled packed numerics and a separate Hungarian implementation.
+* HIL preserves host simulation triggers/order, but RP2040 decisions can change the subsequent path.
+* Physical Bayesian programs implement analogous algorithms/ranking/K but are independent monolithic copies, not HIL modules.
+
+Not supported:
+* One identical filter implementation across all allocators/platforms: selection varies among full sort, pre-sort/double-sort paths, and bounded insertion.
+* Identical Collaborative tie-breaking: AGX uses (x,y), HIL uses row-major y,x.
+* Identical physical and HIL allocator code.
+* Identical benchmark planning horizons as listed in the question.
+* Identical numerical precision/data structures across AGX, HIL, and physical.
+* Full physical scenario identity or a physical Collaborative/DGA validation.
+
+Evidence: consolidated evidence in answers 1-37, especially base.py lines 139-157, memory_optimized.py lines 149-268, native collaborative base.py lines 17-41, device/physical/factory.py lines 1-38, and physical Pololu candidate/timing regions.
+
+Platform differences: This answer is itself the cross-platform classification: shared high-level rule and study controls are supported, implementation identity is not.
+
+82. Manuscript statements that would be technically inaccurate
+
+Direct answer: Without manuscript text, exact offending sentences are Not determinable from the provided source. The following formulations would be inaccurate and should be avoided:
+
+* "The filter ranks by probability-adjusted path cost/utility." It ranks by raw local probability, Manhattan distance, then deterministic cell key.
+* "K is recalculated from the number of currently available candidates." It is fixed from 361 or 50.
+* "At 100%, the filter performs no work." Candidate discovery/validity is timed; packed implementations compute keys, and HIPC/DGA can still rank.
+* "Every allocator uses the identical preprocessing function." Multiple implementations and allocator-specific exceptions exist.
+* "All allocators use the original benchmark horizons 1/8/3/5/5/3 and 1/5/5/3/3/1." The study uses 1 for CBAA and 3 for all others.
+* "Filter time is only sorting." It includes full candidate discovery/validity/ranking/selection/return-list work.
+* "Allocator-exclusive time is independently timed." It is subtraction from the enclosing duration.
+* "Communication/message creation is entirely included/excluded." Transport is excluded, but message construction inside choose_goal is included.
+* "AGX trials were sequential." Multiple pinned worker processes ran concurrently.
+* "All platforms execute identical code." Physical and native HIL ports differ.
+* "Collaborative exact ties resolve identically on AGX and RP2040." They do not.
+* "The 30-second value is inserted as a capped timing sample." Timeout attempts are raw failures, not accepted 30-second samples.
+* "HIL validation includes only representative completed conditions." It includes completed trials from later cap-stopped conditions.
+* "The primary Top-K analysis is an omnibus repeated-measures ANOVA/log-time analysis." Current MATLAB code uses paired percent-change t/sign-rank tests with Holm correction.
+* "All physical scenarios are identical full replays of HIL scenarios." Physical episodes differ from the HIL sample and full clue/event identity is not proven.
+
+Evidence: corresponding numbered answers and cited regions throughout this audit.
+
+Platform differences: The listed inaccuracies distinguish AGX, RP2040 HIL, and physical execution wherever the source shows a difference; manuscript text itself was not supplied.
+
+83. Concise methodology-ready implementation summary
+
+Direct answer:
+
+Value-ranked candidate restriction was applied only when an allocator's candidate-selection path executed. For probabilistic search, each robot formed its locally valid unsearched-cell set and ranked candidates lexicographically by descending local target probability, ascending Manhattan distance from its current cell, and ascending coordinate tuple. For Collaborative Visit, the same probability-distance rule was used; because active targets normally had equal value, distance was the effective primary key. The retained count K was fixed before each trial from the full scenario basis using K=max(1,int(Nr+0.5)), with N=361 grid cells for probabilistic search and N=50 initial targets for Collaborative Visit; K was not recomputed from the current candidate count. If no more than K valid candidates remained, all were retained.
+
+The simulation study used a 19x19 grid, four robots starting at (0,0), (0,6), (0,12), and (0,18), six allocators, ideal communication, a one-task CBAA commitment, and horizon three for ACBBA, PI, HIPC, DMCHBA, and DGA. Bayesian simulation evaluated 500 common scenarios per allocator at K={1,4,11,18,36,90,181,271,361}; Collaborative Visit evaluated 100 common 50-target scenarios per allocator at K={1,2,3,5,13,25,38,50}. Candidate-filter time enclosed candidate discovery, validity checking, ranking-value calculation, selection/sorting, truncation, and returned-list construction. Combined allocator time enclosed choose_goal, and allocator-exclusive time was computed as combined time minus cumulative nested filter time. Movement, sensing, path planning, message-bus delivery, USB transfer, and result serialization were outside the timed region.
+
+In Pololu-authoritative HIL, the host retained simulation mechanics and sent each current allocator state/callback set over USB serial to an RP2040. The RP2040 executed and timed choose_goal, returned the chosen goal, allocator messages, and mutable state, and the host applied that response before advancing the simulation. A 30-second watchdog applied to each combined choose_goal call; reproducible timeouts stopped only that condition and were retained as raw failed attempts rather than imputed timing values. The HIL ports used packed arrays and persistent contexts to fit RP2040 memory. Bayesian generated allocators were covered by reference-equivalence tests, whereas native DMCHBA and all native Collaborative ports were separate implementations; notably, Collaborative HIL used a row-major tie-break for exact ties rather than the simulator's coordinate-tuple order.
+
+Trial-level maximum robot steps was the maximum of the four robot step counts and total team steps was their sum. Cumulative allocator time was the sum of all robot call durations, and mean time per call was that team total divided by the team call count. Primary K-versus-100% analyses paired completed, valid rows by TrialID and tested paired percentage changes using two-sided paired t-tests and approximate Wilcoxon signed-rank tests with Holm adjustment within mission, platform, algorithm, and metric. Absolute K=1 was retained for failure reporting but excluded from the primary performance, computation, and tradeoff modes.
+
+Methodology qualification: The candidate-ranking concept and fixed K conditions are shared across platforms, but the implementation is not literally identical. Selection procedure, packed numeric representation, native ports, and physical standalone code differ, and Collaborative exact-tie ordering differs between AGX and HIL. These qualifications should accompany any cross-platform parity statement.
+
+Evidence: Simulation/Architecture/simulator/benchmark_sim/algorithms/base.py lines 13-27 and 125-157; memory_optimized.py lines 149-268; simulator/core/robot.py lines 291-345; allocator_replay/config/study.py lines 8-52; allocator_replay/hil/bridge.py lines 409-795; device/common/replay_worker.py lines 848-975; Results/Analysis/value_ranked_candidate_restriction_matlab/build_analysis_tables.m lines 442-590 and 709-883.
+
+Platform differences: The final paragraph states the qualification: the ranking concept, K, scenarios, and timing decomposition are shared where documented, while selection procedure, numerical representation, native ports, collaborative tie-breaking, and standalone physical code are not identical.

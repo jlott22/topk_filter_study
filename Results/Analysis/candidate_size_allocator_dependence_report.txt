@@ -1,0 +1,107 @@
+RESULT
+
+Candidate-set size alone does not explain computation time. Performance
+degradation is more strongly size-dependent, but its sensitivity to K still
+varies by allocator and mission.
+
+IMPORTANT DESIGN LIMITATION
+
+CLIPS and retained CV do not contain any exact shared candidate sizes:
+
+- CLIPS overlapping range: K = {4, 11, 18, 36}
+- CV overlapping range: K = {5, 13, 25, 38}
+
+K=1 is shared but is an unreliable boundary condition. I therefore treated K
+as a continuous predictor over the overlapping range and used the near matches
+4/5, 11/13, and 36/38 only as sensitivity comparisons.
+
+For computation, the response was log mean combined time per allocator call.
+For performance, I used paired percentage change in maximum steps from each
+algorithm's own R0 baseline; raw maximum steps are not directly comparable
+between two different mission objectives.
+
+The mixed models included random intercepts for scenario and
+scenario-algorithm combinations.
+
+MODEL RESULTS
+
+Outcome              Size-only pseudo-R^2  + mission and allocator  + interactions  Interpretation
+Compute time         0.010                 0.331                    0.349           Allocator and mission dominate size-only prediction
+Maximum-step change  0.003                 0.006                    0.008           Mostly scenario variability; small but systematic size-dependent interactions
+
+COMPUTE TIME
+
+All relevant effects were strongly significant:
+
+- Candidate size: p < 1e-300
+- Allocator: p < 1e-300
+- Mission: p = 3.1e-9
+- Candidate size x allocator: p = 3.8e-45
+- Candidate size x mission: p < 1e-300
+- Mission x allocator: p = 1.9e-169
+
+Adding mission and allocator to the size-only model increased fixed-effect
+explanatory power from approximately 1% to 33%. This is strong evidence that
+computation is not determined solely by the number of retained candidates.
+
+The near-K comparisons reinforce this result: 13 of 18 allocator-specific
+CLIPS-CV comparisons remained significant after Holm correction. The direction
+also depended on the allocator. For example, near K=36/38:
+
+- CBAA: CLIPS 1.37 ms versus CV 0.55 ms.
+- HIPC: CLIPS 2.20 ms versus CV 9.22 ms.
+- DGA: CLIPS 106.5 ms versus CV 374.9 ms.
+- ACBBA: 2.54 versus 2.16 ms, not significantly different.
+
+Thus, even approximately equal candidate limits can produce very different
+execution times, and the direction of the difference is allocator-specific.
+
+PERFORMANCE
+
+For maximum-step degradation:
+
+- Candidate size was significant: p = 2.2e-24.
+- The overall allocator main effect was not significant after controlling for
+  size and mission: p = 0.100.
+- The overall mission main effect was not significant: p = 0.065.
+- Candidate size x allocator was significant: p = 1.1e-7.
+- Candidate size x mission was significant: p = 8.0e-4.
+- Mission x allocator was not significant: p = 0.908.
+
+None of the 18 individual near-K performance comparisons survived Holm
+correction. Many trials had exactly zero change from R0, while a smaller number
+had large degradations, producing zero-inflated, highly variable distributions.
+
+The appropriate interpretation is therefore:
+
+- Candidate size is the main systematic driver of maximum-step degradation.
+- Allocators do not exhibit a strong constant performance offset after
+  controlling for K.
+- They do exhibit different degradation slopes as K decreases.
+- Therefore, performance is not purely candidate-size-dependent; allocator
+  dependence appears through sensitivity to restriction rather than through a
+  universal ranking shift.
+
+The trial-level sources support the computation and performance models:
+
+- bayesian_topk_all_k_trial_level_system_and_timing_results.csv
+- collaborative_topk_all_k_trial_level_system_and_timing_results.csv
+
+DISCUSSION-READY CONCLUSION
+
+Within the overlapping low-K range, candidate-set size significantly affected
+both computation and maximum-step performance; however, candidate count alone
+did not explain the observed behavior. For computation, adding mission and
+allocator identity increased fixed-effect explanatory power from approximately
+1% to 33%, and significant candidate-size-by-allocator and
+mission-by-allocator interactions showed that similarly sized candidate sets
+incurred different costs across allocator implementations. Maximum-step
+degradation was more directly associated with candidate-set size, although the
+significant candidate-size-by-allocator interaction indicated that allocators
+differed in their sensitivity to increasingly restrictive candidate limits.
+Thus, computation was strongly allocator- and mission-dependent, whereas
+performance was primarily size-dependent but modulated by allocator design.
+
+For a definitive same-K claim, both missions should be rerun on an identical
+grid such as K = {5, 13, 25, 38}. The present analysis supports an adjusted
+overlapping-range comparison, not an exact matched-K experiment.

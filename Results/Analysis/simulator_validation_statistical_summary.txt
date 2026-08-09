@@ -1,0 +1,251 @@
+SIMULATION-HIL SUMMARY
+
+Difference = HIL maximum robot steps - simulation maximum robot steps.
+
+n = 793
+Simulation: mean = 52.707440; SD = 30.800804
+HIL: mean = 52.678436; SD = 29.780489
+Mean paired difference = -0.029004 steps
+SD of paired differences = 14.718072
+Median paired difference = 0 steps
+IQR = 7 steps
+Range = -74 to +97 steps
+90% CI = [-0.889700, 0.831692]
+95% CI = [-1.054955, 0.996947]
+Mean difference relative to simulation mean = -0.055028%
+
+Absolute paired differences:
+
+- Exactly 0: 28.7516% (228/793)
+- <=1 step: 36.5700% (290/793)
+- <=2 steps: 45.2711% (359/793)
+- <=3 steps: 50.6936% (402/793)
+- <=4 steps: 56.4943% (448/793)
+- <=5 steps: 59.8991% (475/793)
+
+Systematic-difference test: paired t-test.
+t(792) = -0.05549327
+Two-sided p = 0.9557594857
+Cohen's dz = -0.001970624
+
+The nonsignificant paired t-test is not treated as evidence of equivalence.
+
+SIMULATION-HIL EQUIVALENCE
+
+Paired TOST, alpha = 0.05. Common 90% CI = [-0.889700, 0.831692].
+
+Margin +/-1 step:
+
+- Lower test: t(792) = +1.857818; p = 0.03178288
+- Upper test: t(792) = -1.968805; p = 0.02466191
+- Overall TOST p = 0.03178288
+- PASS
+- 90% CI = [-0.889700, 0.831692]
+
+Margin +/-2 steps:
+
+- Lower test: t(792) = +3.771130; p = 8.730257e-05
+- Upper test: t(792) = -3.882116; p = 5.608902e-05
+- Overall TOST p = 8.730257e-05
+- PASS
+- 90% CI = [-0.889700, 0.831692]
+
+Margin +/-3 steps:
+
+- Lower test: t(792) = +5.684441; p = 9.225120e-09
+- Upper test: t(792) = -5.795428; p = 4.917404e-09
+- Overall TOST p = 9.225120e-09
+- PASS
+- 90% CI = [-0.889700, 0.831692]
+
+Margin +/-4 steps:
+
+- Lower test: t(792) = +7.597753; p = 4.255149e-14
+- Upper test: t(792) = -7.708739; p = 1.904406e-14
+- Overall TOST p = 4.255149e-14
+- PASS
+- 90% CI = [-0.889700, 0.831692]
+
+Margin +/-5 steps:
+
+- Lower test: t(792) = +9.511064; p = 1.099610e-20
+- Upper test: t(792) = -9.622051; p = 4.202194e-21
+- Overall TOST p = 1.099610e-20
+- PASS
+- 90% CI = [-0.889700, 0.831692]
+
+Smallest passing integer margin: +/-1 step.
+
+SIMULATION-HIL AGREEMENT
+
+Lin's CCC = 0.88198613
+95% CCC CI = [0.85269083, 0.90411311]
+Pearson r = 0.88248704
+Accuracy/bias correction coefficient Cb = 0.99943239
+
+Bland-Altman quantities:
+
+- Mean bias = -0.029004 steps
+- Lower 95% limit of agreement = -28.876424 steps
+- Upper 95% limit of agreement = 28.818417 steps
+
+CCC confidence interval: BCa paired bootstrap with 100,000 resamples and RNG seed 20260805.
+
+SIMULATION-PHYSICAL SUMMARY
+
+Difference = physical maximum robot steps - simulation maximum robot steps.
+
+n = 25
+Simulation: mean = 26.240000; SD = 26.407512
+Physical: mean = 28.680000; SD = 25.365199
+Mean paired difference = +2.440000 steps
+SD of paired differences = 3.330165
+Median paired difference = +2 steps
+IQR = 3.25 steps
+Range = -6 to +9 steps
+90% CI = [1.300496, 3.579504]
+95% CI = [1.065375, 3.814625]
+Mean difference relative to simulation mean = +9.298780%
+
+Absolute paired differences:
+
+- Exactly 0: 12.0000% (3/25)
+- <=1 step: 24.0000% (6/25)
+- <=2 steps: 48.0000% (12/25)
+- <=3 steps: 60.0000% (15/25)
+- <=4 steps: 76.0000% (19/25)
+- <=5 steps: 84.0000% (21/25)
+
+Systematic-difference test: paired t-test.
+t(24) = +3.663482
+Two-sided p = 0.001227290
+Cohen's dz = +0.7326964
+
+SIMULATION-PHYSICAL EQUIVALENCE
+
+Paired TOST, alpha = 0.05. Common 90% CI = [1.300496, 3.579504].
+
+Margin +/-1 step:
+
+- Lower test: t(24) = +5.164909; p = 1.369351e-05
+- Upper test: t(24) = +2.162055; p = 0.9795985
+- Overall TOST p = 0.9795985
+- FAIL
+- 90% CI = [1.300496, 3.579504]
+
+Margin +/-2 steps:
+
+- Lower test: t(24) = +6.666336; p = 3.390282e-07
+- Upper test: t(24) = +0.660628; p = 0.7424287
+- Overall TOST p = 0.7424287
+- FAIL
+- 90% CI = [1.300496, 3.579504]
+
+Margin +/-3 steps:
+
+- Lower test: t(24) = +8.167763; p = 1.090737e-08
+- Upper test: t(24) = -0.840799; p = 0.2043798
+- Overall TOST p = 0.2043798
+- FAIL
+- 90% CI = [1.300496, 3.579504]
+
+Margin +/-4 steps:
+
+- Lower test: t(24) = +9.669190; p = 4.721541e-10
+- Upper test: t(24) = -2.342226; p = 0.01389840
+- Overall TOST p = 0.01389840
+- PASS
+- 90% CI = [1.300496, 3.579504]
+
+Margin +/-5 steps:
+
+- Lower test: t(24) = +11.170617; p = 2.711609e-11
+- Upper test: t(24) = -3.843653; p = 0.0003907302
+- Overall TOST p = 0.0003907302
+- PASS
+- 90% CI = [1.300496, 3.579504]
+
+Smallest passing integer margin: +/-4 steps.
+
+SIMULATION-PHYSICAL AGREEMENT
+
+Lin's CCC = 0.98734421
+95% CCC CI = [0.96436773, 0.99467245]
+Pearson r = 0.99253276
+Accuracy/bias correction coefficient Cb = 0.99477241
+
+Bland-Altman quantities:
+
+- Mean bias = +2.440000 steps
+- Lower 95% limit of agreement = -4.087124 steps
+- Upper 95% limit of agreement = 8.967124 steps
+
+CCC confidence interval: BCa paired bootstrap with 100,000 resamples and RNG seed 20260805.
+
+PHYSICAL RESULTS BY ALGORITHM
+
+CBAA | R6 / K=11 | n=5
+
+- Simulation mean = 25.4
+- Physical mean = 28.0
+- Mean difference = +2.6
+- Median difference = +3
+- Range = +1 to +4
+
+ACBBA | R4 / K=36 | n=5
+
+- Simulation mean = 25.4
+- Physical mean = 29.4
+- Mean difference = +4.0
+- Median difference = +4
+- Range = 0 to +9
+
+PI | R4 / K=36 | n=5
+
+- Simulation mean = 27.6
+- Physical mean = 29.6
+- Mean difference = +2.0
+- Median difference = +4
+- Range = -6 to +9
+
+HIPC | R4 / K=36 | n=5
+
+- Simulation mean = 25.4
+- Physical mean = 28.8
+- Mean difference = +3.4
+- Median difference = +3
+- Range = +1 to +7
+
+DMCHBA | R5 / K=18 | n=5
+
+- Simulation mean = 27.4
+- Physical mean = 27.6
+- Mean difference = +0.2
+- Median difference = 0
+- Range = -2 to +2
+
+FINAL CHECKS
+
+Smallest passing HIL equivalence margin: +/-1 step.
+
+Smallest passing physical equivalence margin: +/-4 steps.
+
+Previously reported HIL results are reproduced:
+
+- Mean difference = -0.029004 steps, consistent with approximately -0.03.
+- Paired t-test p = 0.9557595, consistent with approximately 0.956.
+
+Previously reported physical results are reproduced:
+
+- Mean difference = +2.440000 steps.
+- 95% CI = [1.065375, 3.814625], consistent with approximately [1.07, 3.81].
+- Paired t-test p = 0.001227290, consistent with approximately 0.0012.
+- CCC = 0.9873442, consistent with approximately 0.987.
+
+Discrepancies: none beyond rounding and the addition of the requested statistics and bootstrap CCC confidence intervals.
+
+Pairing audit:
+
+- HIL: 793 unique pairs matched by algorithm, retained rate, K, and trial ID.
+- Physical: 25 unique pairs matched by algorithm, retained rate, K, and source episode/trial ID.
+- The physical file contains 23 records labeled `matched` and two retained records labeled `matched_review`; all 25 are included, consistent with the established aggregate analysis.
