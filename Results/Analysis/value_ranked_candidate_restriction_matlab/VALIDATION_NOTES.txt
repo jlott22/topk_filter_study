@@ -1,0 +1,50 @@
+Package-generation validation notes
+===================================
+
+Verified against the files available in this conversation:
+
+1. Sensitivity source
+   - paired_step_results(2).csv: 17,977 rows.
+   - Restriction levels: 100%, 75%, 50%, 25%, 10%, and 5%.
+   - Probabilistic Search grid environments: 14x14, 19x19, 28x28.
+   - Probabilistic Search team environments: 2, 4, 8 robots.
+   - Probabilistic Search communication environments: Ideal, Bernoulli 25%,
+     Gilbert-Elliott 25%, and Rayleigh 25%.
+   - The multitarget rows contain only one Collaborative Visit environment,
+     so no collaborative environmental interaction is inferred.
+   - Complete matched trial counts vary slightly because incomplete curves are
+     removed, as requested. Grid has 50 complete curves per environment and
+     algorithm; matched team and communication counts are recorded by the script.
+
+2. Environmental baselines inferred from the source
+   - Grid size: 19x19.
+   - Team size: 4 robots.
+   - Communication: Ideal.
+
+3. Restriction modes
+   - R0-R7 exactly match the requested Probabilistic Search and Collaborative
+     Visit percentage/K mappings.
+   - Absolute K=1 is not assigned a mode.
+
+4. Bayesian/Probabilistic HIL Pareto-compromise selection
+   Recalculation from the uploaded HIL trial and condition files reproduced the
+   physical-validation settings:
+   - CBAA: R6 = 3% (K=11)
+   - ACBBA: R4 = 10% (K=36)
+   - PI: R4 = 10% (K=36)
+   - HIPC: R4 = 10% (K=36)
+   - DMCHBA: R5 = 5% (K=18)
+   - DGA: no feasible HIL condition
+
+5. MATLAB environment
+   - MATLAB R2025b and Statistics and Machine Learning Toolbox are sufficient.
+   - Parallel Computing Toolbox is optional; the package defaults to serial
+     execution and does not require installation of another toolbox.
+
+Limit of validation in this environment
+---------------------------------------
+The collaborative HIL campaign files listed in analysis_config.m were not among
+all locally available uploaded files when this package was generated, so the
+complete MATLAB package could not be executed end-to-end here. The preflight
+script verifies their paths, schemas, and condition-aggregate files before any
+local analysis output is written.

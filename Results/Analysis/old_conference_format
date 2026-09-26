@@ -1,0 +1,653 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+% --- Recommended packages ---
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage[caption=false,font=footnotesize]{subfig}
+
+
+
+
+% --- For tighter typesetting if needed (optional) ---
+% \usepackage{microtype}
+
+\begin{document}
+
+\title{Toward Deployable Decentralized Multi-Robot Task Allocation: Candidate Restriction on Embedded Edge Hardware}
+
+\author{
+\IEEEauthorblockN{James Lott\\ \small Student Member, IEEE}
+\IEEEauthorblockA{\textit{Shiley Marcos School of Engineering}\\
+\textit{University of San Diego}\\
+San Diego, United States of America\\
+jlott@sandiego.edu}
+
+\and
+\IEEEauthorblockN{Parker Warren\\ \small Student Member, IEEE}
+\IEEEauthorblockA{\textit{Shiley Marcos School of Engineering}\\
+\textit{University of San Diego}\\
+San Diego, United States of America\\
+pwarren@sandiego.edu}
+
+\and
+\IEEEauthorblockN{Vahraz Honary\\ \small Senior Member, IEEE}
+\IEEEauthorblockA{\textit{Shiley Marcos School of Engineering}\\
+\textit{University of San Diego}\\
+San Diego, United States of America\\
+vhonary@sandiego.edu}
+}
+
+\IEEEpubid{\makebox[\columnwidth]{979-8-3315-5193-3/26/\$31.00~\copyright~2026 IEEE\hfill}\hspace{\columnsep}\makebox[\columnwidth]{}}
+
+\maketitle
+
+\IEEEpubidadjcol
+
+\begin{abstract}
+Decentralized multi-robot task-allocation (MRTA) methods are often evaluated in simulation without accounting for execution constraints on embedded edge hardware. This paper introduces a uniform, allocator-independent, value-ranked Top-\(K\) candidate-restriction mechanism and evaluates it across six decentralized allocators. Clue-Informed Probabilistic Search (CLIPS) serves as the primary study, with Collaborative Visit (CV) providing complementary cross-mission evaluation. Paired AGX Orin simulations quantify mission-performance and computation tradeoffs, RP2040 hardware-in-the-loop trials characterize embedded feasibility, and selected CLIPS operating points are validated on a physical four-robot testbed. At 10\% candidate retention in CLIPS, mean AGX computation per call was reduced by approximately 26--99.6\% across algorithms, with an 8.9\% mean paired maximum-step degradation. Candidate restriction also moved HIPC and DMCHBA from infeasible to feasible execution under the imposed 30-s RP2040 threshold, while DGA remained infeasible across the evaluated CLIPS conditions. CV exhibited similar computational benefits but different allocator-specific tradeoffs, demonstrating that neither retained percentage nor absolute \(K\) alone predicts deployment behavior. Physical trials remained highly concordant with simulation (\(\mathrm{CCC}=0.987\)) with a 2.44-step mean penalty, while sensitivity tests showed broadly stable restriction-response trends across the tested grid sizes, team sizes, and communication conditions. These results characterize candidate restriction as an effective but allocator-, mission-, and hardware-dependent control for embedded MRTA deployment.
+\end{abstract}
+
+\begin{IEEEkeywords}
+multi-robot task allocation, candidate restriction, edge computing,
+computational scalability, embedded systems
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Multi-robot systems (MRS) have a multitude of potential and realized real-world applications in domains such as logistics, surveillance, and search and rescue \cite{chakraa2023optimization}. The performance of an MRS is heavily dependent upon an effective task allocator. The goal of Multi-robot task allocation (MRTA) is to distribute tasks among autonomous robots to optimize a mission objective \cite{athira2024systematic}. MRTA methods are commonly categorized as centralized or decentralized: centralized methods use globally aggregated information or a central decision point, whereas decentralized methods coordinate through peer-to-peer communication \cite{chakraa2023optimization}. This paper is restricted to decentralized methods due to their scalability and fault tolerance\cite{Almadhoun2019}, key attributes in communication-degraded or large-scale multi-robot environments where the resource-constrained edge devices considered in this study could be expected to operate.
+
+Despite extensive MRS literature, recent surveys identify a persistent simulation-to-deployment gap\cite{athira2024systematic,chakraa2023optimization,Almadhoun2019}. This gap is reflected in limited real-world experimentation, heavy reliance on simulation-only evaluation, and inadequate consideration of computational and communication constraints. Recent benchmarking under degraded communications has addressed this gap by evaluating algorithm behavior under deployment-relevant communication impairment \cite{mybenchmark}. However, practical execution on edge devices, where allocation latency can affect mission time, remains less understood. In addition, to the authors' knowledge, no cross-family evaluation of hardware execution on embedded platforms currently exists. 
+
+Prior work has addressed the high computational complexity of MRTA algorithms by reducing allocation scope. Recent methods include utility sparsification, task-subset selection, and robot-task decomposition \cite{liu2011multilevel,xiong2023selective,martin2023clustering}. These mechanisms are generally targeted at, or integrated with, a particular allocator or application, leaving limited evidence that a restriction mechanism transfers across algorithm families, missions, and hardware. In this study, allocation scope is reduced through an allocator-independent, value-ranked Top-$K$ candidate-restriction mechanism. We evaluate six prominent MRTA algorithms in Clue-Informed Probabilistic Search \cite{mypaper1} and Collaborative Visit \cite{2020benchmark} missions on two edge-computing platforms. We offer the following contributions:
+We offer the following contributions:
+\begin{enumerate}
+    \item A uniform, allocator-independent, value-ranked Top-\(K\)
+    candidate-restriction mechanism evaluated across six decentralized
+    allocators and two mission structures.
+    
+    \item Direct measurement and decomposition of candidate-restriction and
+    allocator latency on AGX Orin and RP2040 platforms, including
+    allocator-specific hardware-feasible operating regions.
+    
+    \item A paired performance--compute characterization with per-allocator
+    Pareto operating-point selection, HIL execution, and physical four-robot
+    testbed validation.
+    
+    \item Evidence that useful candidate limits are allocator-, mission-, and
+    hardware-dependent, supported by cross-mission and environmental-sensitivity
+    analyses.
+\end{enumerate}
+
+\section{Related Work}
+
+Computational scalability in multi-robot task allocation (MRTA) has been addressed by reducing different parts of the allocation pipeline. Selective Multi-Robot Task Planning optimizes a fixed subset of statistically critical tasks while assigning the remainder through simpler policies \cite{xiong2023selective}; Li et al.'s ``top $k\%$'' method instead assigns groups of nearby deposition paths iteratively until all paths are allocated \cite{li2024deposition}. Other approaches reduce problem coupling or defer computation: Martin et al. cluster robots and tasks into smaller allocation subproblems \cite{martin2023clustering}, Liu et al. adapt the number of arriving warehouse tasks accumulated before optimization \cite{liu2022adaptive}, and Dahlquist et al. generate candidate bundles using inexpensive estimates before applying high-fidelity path evaluation only to the most promising candidates \cite{dahlquist2026varying}. These studies establish the broader quality--computation tradeoff, but they intervene at different stages (task selection, decomposition, batching, or cost evaluation), are focused on centralized allocator methods, and each is integrated with a particular allocator or application.
+
+The closest precedent to the present work is the sparse assignment method proposed by Liu and Shell \cite{liu2011multilevel}. Their method aggregates a global robot--task utility matrix, retains a fraction $\rho$ of the highest-valued entries in each robot's row, and uses hypergraph partitioning to form smaller one-to-one assignment problems that local leaders solve using the Hungarian algorithm. Candidate restriction is therefore coupled to a new hybrid centralized--distributed solver and its decomposition structure rather than applied as a standalone preprocessor to existing allocators. Their simulations dispatched homogeneous robots to destination waypoints and evaluated total assignment distance relative to Hungarian and greedy baselines. Computational benefits were characterized primarily through matrix sparsity, parallel decomposition, and complexity analysis rather than measured embedded execution latency or closed-loop mission outcomes. 
+
+In contrast, the present work applies a common value-ranked Top-$K$ candidate restriction before the six existing MRTA algorithms without partitioning the robot--task graph or modifying allocator internals, including algorithms with single-task and bundle-forming allocation structures. We evaluate both mission-level performance and measured allocator compute latency in two established mission types on edge and resource-constrained hardware. The contribution to the field is therefore a standardized cross-family characterization of when candidate restriction transfers across algorithms, missions, and hardware, rather than the introduction of candidate reduction itself.
+
+\section{System Design and Candidate Restriction}
+\label{sec:system_design}
+
+\subsection{System Architecture and Missions}
+
+This study evaluates value-ranked candidate-set restriction within a common decentralized multi-robot architecture. Four robots operate on a discrete $19\times19$ grid. Each MRTA algorithm is implemented as an allocator that selects a task cell, while a shared robot layer handles motion execution, A* path planning, sensing, local mission-state updates, communication, collision avoidance, and metric collection. Simulation execution is event-driven and asynchronous. Full implementation details for the simulation architecture and allocation algorithms can be accessed at \cite{mybenchmark}.
+
+Two mission types are considered. In Clue-Informed Probabilistic Search (CLIPS)\cite{mypaper1,mybenchmark}, agents search for a hidden target using information derived from discovered clues. Robots initially execute a common deterministic search sweep, then, upon finding a clue, local belief maps are updated to their posterior distributions. At each allocation event, the unrestricted candidate set contains all valid cells that the robot locally considers unsearched. In Collaborative Visit (CV) \cite{2020benchmark,mybenchmark}, the environment contains known target locations that must be visited by the team. Unlike CLIPS, the first allocation event is at robot start positions. The task set contains all target locations locally considered to be unvisited by the team. 
+
+\subsection{Value-Ranked Candidate-Set Restriction}
+
+Let $\mathcal{C}_{i,t}$ denote the set of locally valid candidate tasks available to robot $i$ at allocation event $t$. Candidate restriction retains the first $K$ elements after lexicographic ranking:
+
+\begin{equation}
+\mathcal{C}_{i,t}^{K}
+=
+\operatorname{first}_{K}
+\left[
+\operatorname{sort}_{q\in\mathcal{C}_{i,t}}
+\left(
+-P_i(q,t),
+d_1(x_i(t),q),
+q_x,
+q_y
+\right)
+\right],
+\label{eq:topk_filter}
+\end{equation}
+
+where $P_i(q,t)$ is the locally maintained value of candidate $q$, $d_1(x_i(t),q)$ is the Manhattan distance from the robot's current cell, and $(q_x,q_y)$ provides deterministic tie-breaking. Candidates with higher local value are therefore retained first. In CV, all active targets have equal value, so distance is the effective primary ranking criterion.
+
+The retained count is fixed before each trial from the full problem size. CLIPS uses a basis of 361 grid cells, while CV uses a basis of 50 initial targets. The value of $K$ is not recomputed as tasks are completed. When the number of valid candidates is less than or equal to $K$, the complete valid set is retained.
+
+For consistent presentation across the analysis, each retained-candidate condition is assigned a restriction mode as defined in Table~\ref{tab:restriction_modes}. R0 denotes the unrestricted candidate condition, and increasing mode indices indicate progressively stronger restriction. Because the two missions begin with different candidate-set sizes, the retained percentage and absolute value of \(K\) are reported separately for each mission.
+
+\begin{table}[t]
+    \centering
+    \caption{Restriction modes and retained candidate counts.}
+    \label{tab:restriction_modes}
+    \footnotesize
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabular}{@{}ccccc@{}}
+        \hline
+        & \multicolumn{2}{c}{CLIPS}
+        & \multicolumn{2}{c}{CV} \\
+        \cline{2-3}\cline{4-5}
+        Mode & Retained & \(K\) & Retained & \(K\) \\
+        \hline
+        R0 & \(100\%\) & 361 & \(100\%\) & 50 \\
+        R1 & \(75\%\)  & 271 & \(75\%\)  & 38 \\
+        R2 & \(50\%\)  & 181 & \(50\%\)  & 25 \\
+        R3 & \(25\%\)  & 90  & \(25\%\)  & 13 \\
+        R4 & \(10\%\)  & 36  & \(10\%\)  & 5  \\
+        R5 & \(5\%\)   & 18  & ---       & --- \\
+        R6 & \(3\%\)   & 11  & ---       & --- \\
+        R7 & \(1\%\)   & 4   & ---       & --- \\
+        \hline
+    \end{tabular}
+\end{table}
+
+Candidate restriction is applied only when an allocator requests candidates during allocation. Existing valid commitments are handled through each allocator's normal repair, commitment, and deconfliction rules. Thus, the restriction changes the set of candidates admitted to the allocation process without replacing the internal decision mechanism of the allocator.
+
+\subsection{Decentralized Allocation Methods}
+
+The study evaluates six decentralized allocators spanning single-task auctions, bundle and path methods, implicit team planning, deterministic assignment, and evolutionary optimization. The implementations preserve the algorithm-specific decision semantics presented in \cite{mybenchmark}. Defining algorithmic characteristics needed to interpret responses to candidate restriction are summarized here.
+
+\textbf{CBAA:}
+The Consensus-Based Auction Algorithm \cite{CBAA} maintains one current task per robot. Each robot bids for an immediate task and exchanges winning claims with its peers until conflicts are resolved.
+
+\textbf{ACBBA:}
+The Asynchronous Consensus-Based Bundle Algorithm \cite{ACBBA} constructs an ordered task bundle using marginal insertion bids. Timestamped consensus reconciles asynchronous claims, and losing a task invalidates the dependent suffix of the local bundle.
+
+\textbf{PI:}
+The Performance Impact algorithm \cite{PI} evaluates tasks using their marginal effect on route cost. Robots exchange task ownership and significance information while maintaining ordered paths. When a task is lost, only that task is removed and the remaining path is reevaluated.
+
+\textbf{HIPC:}
+The Hybrid Information and Plan Consensus algorithm \cite{HIPC} predicts the behavior of locally known peers and greedily constructs a local team plan. Each robot retains its assigned portion and exchanges task-level claims to resolve conflicts.
+
+\textbf{DMCHBA:}
+The Distributed Matching-by-Clone Hungarian-Based Algorithm \cite{DMCHBA} creates agent clones and applies the Hungarian method to the current candidate set. Tasks assigned to the local robot's clones are ordered into a route, from which a bounded prefix is committed.
+
+\textbf{DGA:}
+The Decentralized Genetic Algorithm \cite{DGA} evolves team-wide assignments of the current candidate set through selection, crossover, mutation, and repair. Plans are evaluated using a makespan-dominant objective with a secondary total-route-cost term.
+
+Multi-task algorithms use a common planning horizon of three. Because this study evaluates each algorithm relative to its own unrestricted condition, holding planning depth constant supports controlled intra-algorithm comparison across candidate-set sizes.
+
+
+\section{Experimental Methodology}
+\label{sec:experimental_methodology}
+
+\subsection{Experimental Campaign}
+
+The primary campaigns use a \(19\times19\) grid, four robots, and ideal
+communication. The CLIPS simulation campaign contains 500 paired scenarios
+for each algorithm and restriction setting. CV serves as a complementary
+cross-mission evaluation and contains 100 paired 50-target scenarios per
+algorithm and setting. Within each mission, the same scenario instances are
+reused across algorithms and candidate levels for paired-scenario evaluation.
+Separate CLIPS sensitivity campaigns vary grid size, team size, and
+communication condition over R1--R5.
+
+Performance and timing summaries use completed trials, while non-completions
+are retained in the failure accounting. Paired changes are calculated only
+from scenario IDs completed under both the restricted and corresponding R0
+conditions.
+
+\subsection{Embedded Hardware and HIL Execution}
+
+The evaluated processors are edge-computing platforms used as robotic control systems. The RP2040 processors are embedded in Pololu 3pi+ robots used in the physical testbed and represent an extremely resource-constrained edge platform for task-allocation execution. The NVIDIA Jetson AGX Orin was selected for its common use in larger robotic platforms and higher computational performance.
+
+The AGX Orin experiments use CPU affinity with single-threaded workers and single-threaded numerical-library execution. Multiple conditions may be evaluated concurrently, but each simulator worker executes one trial stream on a dedicated processor core.
+
+The hardware-in-the-loop (HIL) architecture retains scenario execution, simulated motion, sensing, communication delivery, path planning, and event scheduling on the host. At each allocation event, the current robot state and delivered allocator information are transferred to an RP2040. The RP2040 executes both candidate restriction and task allocation, measures the complete allocator call locally, and returns the selected task, outgoing allocator messages, and updated allocator state before the host advances the mission. All reported HIL allocation decisions and timing measurements therefore originate from RP2040 execution. The AGX Orin and RP2040 use the same allocator implementation. The exact implementation differs from \cite{mybenchmark} only through optimizations required by the memory constraints of the RP2040.
+
+A maximum combined allocator-call time of 30~s is imposed as an extreme practical execution threshold. A condition that reproducibly exceeds this limit is classified as hardware-infeasible under the imposed requirement.
+
+\subsection{Physical Testbed Mode Selection}
+\label{sec:physical_mode_selection}
+
+Physical-validation modes were selected separately for each allocator using the CLIPS HIL results. A restriction mode was considered hardware-feasible only if all 25 trials completed without failure and every combined allocator call remained below the 30-s execution threshold. Among the feasible modes, Pareto-dominated conditions were removed using mean maximum robot steps and mean combined allocator time per call, with lower values preferred for both metrics. A mode was Pareto dominated when another feasible mode was no worse in either metric and strictly better in at least one.
+
+For the remaining Pareto-efficient modes, mean maximum steps and mean
+combined allocator time per call were independently min--max normalized to
+$[0,1]$ within each algorithm. The selected mode minimized the equal-weight
+distance from the ideal performance--compute point,
+
+\begin{equation}
+J_{a,r}
+=
+\sqrt{
+\frac{1}{2}\widetilde{S}_{a,r}^{\,2}
++
+\frac{1}{2}\widetilde{C}_{a,r}^{\,2}},
+\end{equation}
+
+where $\widetilde{S}_{a,r}$ and $\widetilde{C}_{a,r}$ are the normalized
+mean maximum-step count and normalized mean combined allocator time per call
+for algorithm $a$ at restriction mode $r$. The feasible Pareto-efficient mode
+with the smallest $J_{a,r}$ was selected for physical validation.
+
+\subsection{Metrics}
+
+Mission performance is evaluated using the maximum number of steps completed
+by any robot in the team,
+
+\begin{equation}
+    S_{\max}=\max_{i\in\mathcal{R}} S_i,
+    \label{eq:max_steps}
+\end{equation}
+
+where \(S_i\) is the number of completed grid-cell transitions by robot \(i\).
+This metric serves as a discrete proxy for motion-based mission completion time
+under constant movement speed \cite{2020benchmark,mybenchmark}. Total team
+steps are additionally used as a secondary diagnostic of aggregate team effort
+when interpreting algorithm-specific behavior.
+
+Computational cost is measured using mean combined candidate-restriction and
+allocator time per call. The timed region includes candidate discovery,
+validity checking, value and distance evaluation, candidate ranking or
+selection, truncation, returned-set construction, and subsequent allocator
+execution. Movement, sensing, path planning, communication transport, host
+waiting, and result serialization are excluded. Candidate-restriction overhead
+is reported as its aggregate share of combined timed execution, calculated as
+the total candidate-restriction time divided by total combined time across
+completed trials in each condition.
+
+For either primary metric \(X\), the paired change for trial \(i\) and
+restriction mode \(r\), relative to the unrestricted R0 condition, is
+
+\begin{equation}
+    \Delta X_{i,r}
+    =
+    100
+    \frac{X_{i,r}-X_{i,\mathrm{R0}}}
+         {X_{i,\mathrm{R0}}}.
+    \label{eq:paired_metric_change}
+\end{equation}
+
+Positive values indicate an increase relative to R0, corresponding to
+additional maximum robot steps for mission performance or increased
+computation time for computational cost; negative values indicate a reduction.
+
+
+\subsection{Statistical Analysis}
+
+Statistical analyses preserve the paired-scenario structure where applicable.
+Simulator--HIL and simulator--physical validation use paired $t$-tests to
+quantify systematic differences in maximum robot steps, two one-sided tests
+(TOST) to evaluate practical equivalence \cite{schuirmann1987}, and Lin's
+concordance correlation coefficient (CCC) to quantify agreement
+\cite{lin1989}. Equivalence margins of $\pm1$ step for HIL validation and
+$\pm4$ steps for physical validation are used.
+
+Environmental sensitivity is evaluated using permutation-based omnibus tests
+on five-mode restriction-response curves spanning R1--R5. Team-size and
+communication comparisons preserve matched trial IDs and permute environment
+labels within trials, whereas grid-size comparisons are treated as independent
+and permute environment labels across complete curves. Each test uses 99,999
+permutations, with permutation $p$-values calculated using the finite-sampling
+correction $(b+1)/(B+1)$ \cite{phipson2010}. Omnibus tests are Holm corrected
+across allocators within each environmental family and metric
+\cite{holm1979}. Only significant omnibus results proceed to pairwise
+environment comparisons and restriction-level follow-ups, with Holm correction
+applied within each subsequent comparison family.
+
+Cross-mission computational effects are evaluated using linear mixed-effects
+models of log-transformed mean combined allocator time per call. Candidate-set
+size, mission, allocator, and their interactions are treated as fixed effects,
+with random intercepts accounting for scenario and scenario--allocator
+variation. Statistical significance is evaluated at $\alpha=0.05$.
+
+
+\section{Results}
+
+\subsection{Effects on Mission Performance}
+\label{sec:mission_performance}
+
+\begin{figure}[t!]
+    \centering
+
+    \subfloat[]{%
+        \includegraphics[width=\columnwidth]
+        {figures/ps_max_step_change_by_restriction_mode.png}
+        \label{fig:performance_ps}
+    }
+
+    \vspace{1mm}
+
+    \subfloat[]{%
+        \includegraphics[width=\columnwidth]
+        {figures/cv_max_step_change_by_restriction_mode.png}
+        \label{fig:performance_cv}
+    }
+
+    \caption{Paired mean change in maximum robot steps relative to R0 for
+    (a) CLIPS and (b) CV.
+    Positive values indicate additional maximum robot steps. Restriction
+    increases from left to right, with modes defined in
+    Table~\ref{tab:restriction_modes}. }
+    \label{fig:performance}
+    \vspace{-2mm}
+\end{figure}
+
+Figure~\ref{fig:performance} shows that sensitivity to candidate restriction
+depends on both mission type and allocator. Because restriction modes are
+displayed at equal horizontal spacing, the trajectories should not be
+interpreted as responses to equally spaced changes in candidate retention.
+
+The unrestricted results provide context for the paired degradation curves.
+In CLIPS, mean maximum steps at R0 ranged from \(41.2\) to \(42.5\) for CBAA,
+ACBBA, PI, HIPC, and DMCHBA, while DGA required \(45.7\) steps. This close
+grouping is consistent with the relatively small ideal-communication
+separations reported in \cite{mybenchmark}. CV showed greater baseline
+separation, with R0 means ranging from \(42.8\) to \(50.8\) steps. The paired
+results therefore characterize each allocator's sensitivity to restriction
+rather than establishing a universal absolute-performance ranking.
+
+Across all six algorithms, reducing the CLIPS candidate set from 100\% to
+10\% retention produced a mean paired maximum-step degradation of 8.9\%.
+Reducing retention by the remaining nine percentage points, from 10\% to 1\%,
+produced an additional 11.4\% degradation. This indicates a large portion of
+the candidate set can be removed with comparatively modest performance loss,
+whereas further restriction within the final 10\% produces disproportionately
+larger degradation. DGA is the principal exception to the otherwise generally
+increasing CLIPS trend, while HIPC shows the sharpest low-retention penalty,
+reaching 34.5\% degradation at 1\% retention.
+
+CV exhibits a more stable response over its evaluated range of 100\% to 10\%
+retention, suggesting that distant tasks have little effect on allocator
+performance. CBAA, ACBBA, and PI remain within 3.4\% of unrestricted
+performance at 10\% retention, whereas HIPC and DMCHBA exhibit greater
+sensitivity as the candidate set is reduced yet remain under 10\% degradation.
+DGA once again exhibits non-monotonic behavior. These differences indicate
+that both allocator structure and mission-specific candidate semantics
+determine how aggressively the candidate set can be restricted before mission
+performance deteriorates.
+
+Of the 24,000 primary CLIPS simulation trials, 23,987 completed. The 13
+safety-cap failures occurred for HIPC (eight across 50\%, 10\%, 5\%, and 1\%
+retention), ACBBA (two at 1\%), PI (two at 1\%), and DGA (one at 50\%).
+All 3,000 primary CV trials completed.
+
+\subsection{Effects on Computational Overhead}
+\label{sec:compute_effects}
+
+\begin{figure*}[t!]
+    \centering
+    \includegraphics[width=0.99\textwidth]
+    {figures/compute_effects_heatmaps.png}
+    \caption{Computational effects of value-ranked candidate restriction. Panels
+report mean combined candidate-restriction-plus-allocation time per call in
+milliseconds for both devices and mission types. Restriction modes are defined
+in Table~\ref{tab:restriction_modes}. CAP denotes a condition that
+reproducibly exceeded the 30-s per-call execution threshold.}
+    \label{fig:compute}
+    \vspace{-2mm}
+\end{figure*}
+
+Figure~\ref{fig:compute} shows that allocator computational complexity is a
+critical consideration for embedded deployment and that candidate restriction
+can substantially reduce execution latency. Across the 54 conditions completed
+on both platforms, AGX Orin combined allocator-call execution was \(169.9\times\) faster on
+average than RP2040 execution, based on the geometric mean of condition-level
+speedups. The benefit of restriction, however, depends strongly on allocator
+complexity and mission candidate-set size.
+
+The measured restriction-stage share explains part of this dependence. At
+10\% retention, candidate discovery, ranking, and truncation accounted for
+\(0.4\%\)--\(67.7\%\) of combined AGX time in CLIPS and
+\(0.3\%\)--\(63.6\%\) in CV. Among the CLIPS allocators completing at this
+setting on the RP2040, the corresponding share was
+\(10.8\%\)--\(77.8\%\). Restriction overhead therefore constitutes a large
+fraction of execution for inexpensive allocators but remains small relative to
+the downstream optimization performed by the most computationally intensive
+methods.
+
+In CLIPS, the lower-cost CBAA, ACBBA, and PI allocators initially incur
+restriction overhead before reduced allocator workload becomes dominant.
+CBAA mean per-call latency more than doubles at 50\% retention relative to
+the unrestricted condition, but falls approximately 26\% below R0 at 10\%
+retention and 57\% below R0 at 1\%. ACBBA and PI exhibit smaller versions
+of the same crossover, reaching reductions of approximately 68\% and 77\%,
+respectively, at 10\% retention.
+
+The more computationally intensive HIPC, DMCHBA, and DGA benefit from
+restriction over a broader range. At 10\% retention, their AGX mean per-call
+latencies are reduced by approximately 81\%, 99.6\%, and 88\%,
+respectively, relative to unrestricted execution. DMCHBA shows the strongest
+response, decreasing from approximately \(946\)~ms per call at 100\%
+retention to \(3.4\)~ms at 10\%.
+
+The RP2040 measurements show when these relative savings become large enough
+to change hardware feasibility. In CLIPS, HIPC and DMCHBA exceed the imposed
+30-s execution threshold at larger candidate sets but become feasible under
+stronger restriction. DMCHBA first completes at 10\% retention with a mean
+per-call time of approximately \(1.2\)~s, decreasing to \(40.8\)~ms at 1\%.
+HIPC becomes feasible at 25\% retention and falls below \(1\)~s at 5\%.
+DGA, despite an approximately 95\% AGX latency reduction between 100\% and
+1\% retention, remains above the RP2040 threshold at every tested CLIPS
+setting.
+
+CV requires substantially less computation because its initial candidate set
+contains 50 targets rather than 361 cells. At 10\% retention, CBAA, ACBBA,
+and PI reduce AGX latency by approximately 25\%, 50\%, and 45\%,
+respectively, while HIPC, DMCHBA, and DGA achieve reductions of approximately
+87\%, 88\%, and 80\%. On the RP2040, DMCHBA becomes feasible at 50\%
+retention and decreases to \(96.2\)~ms per call at 10\%, while DGA remains
+above the execution threshold through the strongest CV restriction considered.
+
+The CLIPS HIL campaign produced 793 successful system trials. Three additional
+trials failed, and 17 of the 48 algorithm--mode conditions were stopped by the
+30-s cap. Overall, candidate restriction can both accelerate already-feasible
+allocators and move otherwise infeasible algorithms into an executable regime,
+but the restriction required to do so is allocator-, mission-, and
+hardware-dependent.
+
+\subsection{CLIPS Performance--Compute Tradeoff}
+\label{sec:performance_compute_tradeoff}
+
+The joint tradeoff compares the paired mean change in maximum robot steps,
+\(\overline{\Delta M}_{a,r}\), with the paired mean change in combined
+allocator time per call, \(\overline{\Delta T}_{a,r}\), for algorithm \(a\)
+and restriction mode \(r\). 
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=\columnwidth]
+    {figures/ps_performance_compute_trajectories.png}
+    \caption{Arrows follow progressively stronger candidate restriction. Downward movement indicates reduced computation, and rightward
+    movement indicates increased maximum-step degradation. Stars mark the
+    modes selected for physical validation. DGA has no marked mode because no
+    tested HIL condition satisfied the hardware timing requirement.}
+    \label{fig:tradeoff_trajectories}
+    \vspace{-2mm}
+\end{figure}
+
+Figure~\ref{fig:tradeoff_trajectories} shows that the performance--compute
+tradeoff is strongly algorithm-dependent and frequently non-monotonic.
+Several allocators exhibit an intermediate region in which candidate
+restriction reduces per-call computation before tighter
+restriction produces greater maximum-step degradation. The location of this
+region differs across algorithms, supporting algorithm-specific rather than
+universal restriction settings.
+
+\begin{table}[t]
+    \centering
+    \caption{CLIPS restriction modes selected for physical
+    validation using the hardware-feasible Pareto compromise.}
+    \label{tab:physical_k_selection}
+    \setlength{\tabcolsep}{5pt}
+    \begin{tabular}{lcc}
+        \hline
+        Algorithm & Mode & Selected Top-\(K\) \\
+        \hline
+        CBAA   & R6 & \(3\%\)  (\(K=11\)) \\
+        ACBBA  & R4 & \(10\%\) (\(K=36\)) \\
+        PI     & R4 & \(10\%\) (\(K=36\)) \\
+        HIPC   & R4 & \(10\%\) (\(K=36\)) \\
+        DMCHBA & R5 & \(5\%\)  (\(K=18\)) \\
+        DGA    & --- & No feasible HIL condition \\
+        \hline
+    \end{tabular}
+\end{table}
+
+Applying the hardware-feasibility and Pareto-selection procedure defined in
+Section~\ref{sec:physical_mode_selection} produced the physical-validation
+settings in Table~\ref{tab:physical_k_selection}. The selected settings span R4 through R6, reflecting the distinct
+performance--compute trajectories of the five hardware-feasible allocators.
+DGA was not selected because every tested CLIPS RP2040 condition
+exceeded the imposed per-call timing requirement.
+
+\subsection{Simulator Validation}
+
+HIL execution was first used to evaluate whether moving allocator execution
+from the simulator host to the RP2040 introduced systematic mission-performance
+bias. Across 793 matched CLIPS trials, the mean paired maximum-step difference
+was only $-0.03$ steps. The mean difference was equivalent within $\pm1$ step
+(TOST $p=0.0318$), with a 90\% CI of $[-0.89,\,0.83]$ steps. Thus, RP2040
+execution preserved the aggregate simulation performance metric without
+detectable systematic bias, although individual paired outcomes exhibited
+greater variation ($\mathrm{CCC}=0.882$).
+
+Physical execution produced a small but systematic increase in mission cost.
+Across 25 matched testbed trials, physical robots required an average of
+$2.44$ additional maximum steps (95\% CI: $1.07$--$3.81$, $p=0.0012$).
+Despite this bias, simulation and physical outcomes remained highly concordant
+($\mathrm{CCC}=0.987$, 95\% CI: $0.964$--$0.995$), and the mean difference
+was equivalent within $\pm4$ steps (TOST $p=0.0139$). The physical penalty
+was observed across the validated allocator settings rather than being driven
+by a single algorithm. These results indicate that simulation captures the
+relative physical performance trends with a slight underestimation of embodied
+execution cost.
+
+\subsection{Sensitivity to Environment Scale and Communication}
+
+Permutation-based omnibus tests compared the normalized R1--R5
+restriction-response curves across environmental conditions. Varying
+the CLIPS grid among \(14\times14\), \(19\times19\), and
+\(28\times28\) cells produced no significant change in either the
+maximum-robot-step or total-team-step curve for any allocator after
+Holm correction (all \(p_{\mathrm{Holm}}\geq 0.629\)). Varying the team
+among two, four, and eight robots likewise produced no significant
+curve differences (all \(p_{\mathrm{Holm}}\geq 0.121\)). Thus, within
+the tested ranges, there was no statistically detectable interaction
+between candidate restriction and either grid or team size.
+
+Across ideal communication and 25\% Bernoulli, Gilbert--Elliott, and
+Rayleigh loss, ACBBA, PI, HIPC, DMCHBA, and DGA also showed no
+significant change in either restriction-response curve (all
+\(p_{\mathrm{Holm}}\geq 0.397\)). CBAA was the sole exception, with
+communication-dependent differences in maximum robot steps
+(\(p_{\mathrm{Holm}}=2.4\times10^{-4}\). Follow-up tests localized both effects
+to ideal versus Gilbert--Elliott loss (maximum steps:
+\(p_{\mathrm{Holm}}=6.0\times10^{-5}\).Overall,
+five of the six allocators showed no statistically detectable departure
+from the nominal restriction-response pattern outside the
+\(19\times19\), four-robot, ideal-communication environment.
+
+\section{Discussion}
+
+\subsubsection{Restriction as a Deployment Tradeoff}
+
+Candidate restriction is most beneficial when candidate-dependent allocation
+cost dominates the overhead required to construct the restricted set. HIPC,
+DMCHBA, and DGA therefore obtain substantial computational savings over a
+broad range, whereas the lighter CBAA, ACBBA, and PI can initially incur
+additional overhead in CLIPS before tighter restriction becomes beneficial.
+Restriction can nevertheless remain useful for these lighter allocators when
+a modest performance penalty is acceptable. Absolute hardware capability is
+equally important: large relative reductions did not make DGA feasible on the
+RP2040 in CLIPS, while restriction moved HIPC and DMCHBA from capped to
+feasible execution. Candidate restriction should therefore be viewed as an
+allocator-specific deployment control rather than universally beneficial
+preprocessing.
+
+\subsubsection{Allocator and Mission Dependence}
+
+Computation is not determined by candidate count alone. Over the overlapping
+low-\(K\) range between mission types, candidate-set size alone explained approximately 1\% of
+fixed-effect computation-time variation, compared with about 33\% after
+including mission and allocator identity. Significant interactions further
+showed that similarly sized candidate sets can impose very different costs
+depending on how an allocator processes them. For example, at approximately
+\(K=36/38\), HIPC required \(2.20\)~ms per call in CLIPS but \(9.22\)~ms in
+CV, while CBAA showed the opposite direction. Thus, neither retained
+percentage nor absolute \(K\) provides a portable predictor of execution
+latency. Performance also differed by mission: absolute CLIPS maximum-step
+performance remained closely grouped across most allocators, whereas CV
+produced substantially stronger algorithm separation. The paired percentage metric should consequently be interpreted as
+scenario-normalized sensitivity to restriction rather than as the percentage
+change between aggregate condition means.
+
+\subsubsection{Algorithm-Specific Behavior}
+
+Strong restriction can alter allocator behavior in addition to reducing
+runtime. For HIPC, low-\(K\) CLIPS conditions increase maximum robot steps
+more rapidly than total team steps, indicating that restriction increasingly
+affects workload balance rather than simply increasing aggregate movement. This suggests HIPC optimizes for reduced team effort by allocating tasks to a smaller number of agents when the task selection pool is tightly restricted.
+DGA instead exhibits a non-monotonic response in both missions. This behavior
+is consistent with a smaller assignment space allowing a fixed evolutionary
+search budget to explore the remaining solutions more effectively, although
+the present study does not isolate that mechanism. 
+
+\subsubsection{Deployment Implications}
+
+The validation and sensitivity results support transfer of the observed
+tradeoffs beyond the nominal simulator condition. RP2040 HIL execution showed
+negligible aggregate performance bias, while physical trials preserved high
+simulation concordance with a small step execution penalty. Restriction-response curves were also stable
+across the tested grid and team sizes and across communication conditions for
+five of the six allocators. Collectively, these results indicate that the
+appropriate candidate limit is not a universal retained fraction, or even a
+universal absolute \(K\), but an allocator--mission--hardware operating
+parameter. A natural extension is therefore adaptive candidate restriction
+based on measured execution latency and mission state.
+
+\subsubsection{Limitations}
+
+This study is limited to the two mission types, six decentralized allocators,
+and two embedded platforms considered here, and the observed tradeoffs should
+not be assumed to generalize to all MRTA problems or robotic hardware.
+This scope was selected to enable controlled comparisons across distinct
+missions, allocator families, and computational platforms. Additionally, only
+one allocator-independent candidate-restriction mechanism is evaluated,
+without direct comparison to algorithm-specific or application-specific
+reduction methods from prior work. This design is reasonable for the present
+objective because a common restriction mechanism isolates differences in how
+allocators respond to candidate-set reduction without introducing
+algorithm-specific modifications. Evaluation depth also differs by mission, with CLIPS serving as the primary campaign through a larger paired simulation study and physical testbed validation, while CV provides a complementary cross-mission evaluation with fewer paired trials and no physical testbed validation. Future work should extend this framework to
+additional missions, hardware platforms, ranking strategies, specialized
+restriction methods, and adaptive restriction mechanisms.
+
+\section{Conclusion}
+
+This study introduced a uniform, allocator-independent, value-ranked
+Top-\(K\) candidate-restriction mechanism and provided a cross-family
+characterization across six decentralized allocators, two mission structures,
+and AGX Orin and RP2040 platforms. Timing decomposition showed that
+restriction overhead can dominate inexpensive allocators, whereas reducing the
+admitted task set provides broad savings for methods with greater
+candidate-dependent computation. At 10\% CLIPS retention, AGX per-call
+latency decreased by approximately 26\%--99.6\% across algorithms with an
+8.9\% mean paired maximum-step penalty. Restriction also moved HIPC and
+DMCHBA into an RP2040-feasible regime, while DGA remained infeasible under
+the imposed threshold. Cross-mission, sensitivity, HIL, and physical results
+showed that useful operating regions transfer beyond the nominal simulation
+but are not predicted by retained percentage or absolute \(K\) alone.
+Candidate limit should therefore be treated as an
+allocator--mission--hardware deployment parameter, motivating future adaptive
+selection based on online mission state and measured execution latency.
+
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

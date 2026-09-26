@@ -1,0 +1,67 @@
+[
+  {
+    "file": "README.md",
+    "bytes": 6495,
+    "sha256": "470ea7c22d29db74918d747652e2992129db23b399e5abe3e79ca4262303045a"
+  },
+  {
+    "file": "VALIDATION_NOTES.txt",
+    "bytes": 2206,
+    "sha256": "145e037ae5433ea94edc42bd8dcd1bb8bb6114084f7cea2fd88f61e62d01c5ae"
+  },
+  {
+    "file": "analysis_config.m",
+    "bytes": 4231,
+    "sha256": "41b92c1300b4c5783213bb1cfb164abea561329377347b886c61b07bc09e0613"
+  },
+  {
+    "file": "build_analysis_tables.m",
+    "bytes": 68130,
+    "sha256": "8d0e2ea6bc93828a37178fc04d204967fd0d11baa48ac43814fdde5bd613bcd1"
+  },
+  {
+    "file": "plot_compute_heatmaps.m",
+    "bytes": 5641,
+    "sha256": "e505f36760d8e735a853b5cae8b576d0e83d229d510d00595614cbc012b2a0e7"
+  },
+  {
+    "file": "plot_cv_performance.m",
+    "bytes": 2368,
+    "sha256": "91ddd7efe50dacde2ee701d791fee9f43d7e8f737827fcafba90068ceeb1ac59"
+  },
+  {
+    "file": "plot_failure_rates.m",
+    "bytes": 3699,
+    "sha256": "9f292dba98c3e6539fd106c55b222f3c6abaec403212a6f76f793f1517e02ff7"
+  },
+  {
+    "file": "plot_filter_share_heatmaps.m",
+    "bytes": 3155,
+    "sha256": "48d1f5a303d4c3b903e0e04f41eaa93e5bd6669d0eec29bf2e145b0ee30e2fa8"
+  },
+  {
+    "file": "plot_ps_performance.m",
+    "bytes": 2342,
+    "sha256": "ef1e19e0864008702c52cf405b7c3453bb09d7c325ad1a7334e81d418848460c"
+  },
+  {
+    "file": "plot_tradeoff_trajectories.m",
+    "bytes": 4429,
+    "sha256": "a326e43e4f9a90cc5b791afe625cb30bccb0dfbea64b6f1b75e74ebe9ee3d2c9"
+  },
+  {
+    "file": "restriction_mode_table.tex",
+    "bytes": 588,
+    "sha256": "1598021c9a1d0921bd9c478af0656181b5271b86f794a1f4e6440cf3097ac2cf"
+  },
+  {
+    "file": "run_all.m",
+    "bytes": 430,
+    "sha256": "86ac8af59dd2392d2e49818b3974936c8d71ecfbf0d6f531831c3be9f3a719d7"
+  },
+  {
+    "file": "verify_inputs.m",
+    "bytes": 10415,
+    "sha256": "f13ceb4526073ed7334bf0c243110492bc39a92b0a7ec6125ece4dc62f7bfd4b"
+  }
+]
